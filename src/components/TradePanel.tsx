@@ -113,6 +113,7 @@ function PnlCell({ pnl, pnlPct }: { pnl: number; pnlPct: number }) {
 export function TradePanel() {
   const [positions, setPositions] = useState<PositionInfo[]>([]);
   const [engine, setEngine] = useState<TradeEngineStatus | null>(null);
+  const [accountKey, setAccountKey] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -129,6 +130,7 @@ export function TradePanel() {
         apiClient.getTradeStatus(),
       ]);
       setPositions(posRes.positions || []);
+      setAccountKey(posRes.userId || null);
       setEngine(statusRes.status);
       setError(null);
     } catch (err: any) {
@@ -345,6 +347,10 @@ export function TradePanel() {
           {engine?.lastIngestNote && (
             <span className="text-slate-500">{engine.lastIngestNote}</span>
           )}
+          <span className="text-slate-400 font-mono-tabular">
+            شناسه حساب: {(accountKey || '—').slice(0, 10)} · کاربران موتور:{' '}
+            {engine?.knownUserIds?.length ?? 0}
+          </span>
         </div>
 
         {engine?.lastError && (
