@@ -2240,6 +2240,9 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
   app.get('/api/trade/positions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const userId = requireUser(req);
+      // Make sure the engine knows about this user key even if they never opened
+      // the account page, so future orders are always created for them.
+      await dbRepo.getOrCreateTradeAccount(userId);
       const positions = await dbRepo.getPositions(userId);
       const active = positions.filter((p) => p.status !== 'CLOSED');
       const prices = await fetchPrices([...new Set(active.map((p) => p.symbol))]);
@@ -2262,7 +2265,12 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         };
       });
 
-      res.json({ positions: enriched, userId, totalKnown: positions.length });
+      res.json({
+        positions: enriched,
+        userId,
+        totalKnown: positions.length,
+        diagnostics: await dbRepo.getPositionsDiagnostics(userId),
+      });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در خواندن پوزیشن‌ها' });
     }
