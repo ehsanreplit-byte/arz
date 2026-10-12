@@ -43,8 +43,9 @@ export interface SignalCycleSymbolResult {
   sellSignalsCount: number;
   totalSignalsChecked: number;
   matchedSignalsCount: number;
-  consensusDirection: 'LONG' | 'SHORT' | null;
-  registered: boolean;
+  consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE';
+  qualified: boolean;
+  recorded: boolean;
   chatGptStatus: string;
   aiEngineUsed: string;
   error?: string;
@@ -471,8 +472,9 @@ class SignalEngine {
           sellSignalsCount: 0,
           totalSignalsChecked: 0,
           matchedSignalsCount: 0,
-          consensusDirection: null,
-          registered: false,
+          consensusDirection: 'NO TRADE',
+          qualified: false,
+          recorded: false,
           chatGptStatus: 'در انتظار',
           aiEngineUsed: '—',
         };
@@ -504,12 +506,13 @@ class SignalEngine {
           const sellSignalsCount = breakdown.filter((s) => s.direction === 'SHORT').length;
           const totalSignalsChecked = breakdown.length;
           const matchedSignalsCount = Math.max(buySignalsCount, sellSignalsCount);
-          const consensusDirection: 'LONG' | 'SHORT' | null =
-            matchedSignalsCount >= MIN_CONSENSUS
-              ? buySignalsCount >= sellSignalsCount
+          const isQualified = matchedSignalsCount >= MIN_CONSENSUS;
+          const consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE' =
+            buySignalsCount === sellSignalsCount
+              ? 'NO TRADE'
+              : buySignalsCount > sellSignalsCount
                 ? 'LONG'
-                : 'SHORT'
-              : null;
+                : 'SHORT';
 
           // --- Request to ChatGPT for this symbol (30s gap between send times) ---
           const verdict = await askChatGptVerdict({
@@ -526,46 +529,48 @@ class SignalEngine {
           result.totalSignalsChecked = totalSignalsChecked;
           result.matchedSignalsCount = matchedSignalsCount;
           result.consensusDirection = consensusDirection;
+          result.qualified = isQualified;
           result.chatGptStatus = verdict.status;
           result.aiEngineUsed = verdict.engineUsed;
 
-          if (consensusDirection) {
-            const matching = breakdown.filter((s) => s.direction === consensusDirection);
-            const primary =
-              matching.find((s) => s.id === 'summary') || matching[0] || breakdown[0];
-            const avgScore =
-              breakdown.reduce((acc, s) => acc + (Number(s.score) || 0), 0) /
-              Math.max(1, breakdown.length);
+          // Record EVERY evaluated watchlist symbol (qualified or not) so the
+          // table shows the live price and signal status of all added coins.
+          const matching = breakdown.filter((s) => s.direction === consensusDirection);
+          const primary =
+            matching.find((s) => s.id === 'summary') || matching[0] || breakdown[0];
+          const avgScore =
+            breakdown.reduce((acc, s) => acc + (Number(s.score) || 0), 0) /
+            Math.max(1, breakdown.length);
 
-            const payload: Omit<IRegisteredSignal, '_id' | 'createdAt'> = {
-              symbol,
-              label: result.label,
-              interval: SIGNAL_TIMEFRAME,
-              consensusDirection,
-              buySignalsCount,
-              sellSignalsCount,
-              totalSignalsChecked,
-              matchedSignalsCount,
-              currentPrice: analysis.currentLivePrice,
-              entryPrice: Number(primary?.entryPrice) || analysis.currentLivePrice,
-              stopLoss: Number(primary?.stopLoss) || 0,
-              takeProfit1: Number(primary?.takeProfit1) || 0,
-              takeProfit2: Number(primary?.takeProfit2) || 0,
-              riskRewardRatio: analysis.method6Summary.trade.riskRewardFormatted || '—',
-              averageScore: Math.round(avgScore * 10) / 10,
-              signalsBreakdown: breakdown,
-              chatGptStatus: verdict.status,
-              chatGptDirection: verdict.direction,
-              chatGptSetupName: verdict.setupName,
-              chatGptReasoning: verdict.reasoning,
-              aiEngineUsed: verdict.engineUsed,
-              cycleNumber,
-            };
+          const payload: Omit<IRegisteredSignal, '_id' | 'createdAt'> = {
+            symbol,
+            label: result.label,
+            interval: SIGNAL_TIMEFRAME,
+            consensusDirection,
+            isQualified,
+            buySignalsCount,
+            sellSignalsCount,
+            totalSignalsChecked,
+            matchedSignalsCount,
+            currentPrice: analysis.currentLivePrice,
+            entryPrice: Number(primary?.entryPrice) || analysis.currentLivePrice,
+            stopLoss: Number(primary?.stopLoss) || 0,
+            takeProfit1: Number(primary?.takeProfit1) || 0,
+            takeProfit2: Number(primary?.takeProfit2) || 0,
+            riskRewardRatio: analysis.method6Summary.trade.riskRewardFormatted || '—',
+            averageScore: Math.round(avgScore * 10) / 10,
+            signalsBreakdown: breakdown,
+            chatGptStatus: verdict.status,
+            chatGptDirection: verdict.direction,
+            chatGptSetupName: verdict.setupName,
+            chatGptReasoning: verdict.reasoning,
+            aiEngineUsed: verdict.engineUsed,
+            cycleNumber,
+          };
 
-            await dbRepo.addRegisteredSignal(payload);
-            result.registered = true;
-            registered += 1;
-          }
+          await dbRepo.addRegisteredSignal(payload);
+          result.recorded = true;
+          if (isQualified) registered += 1;
 
           evaluated += 1;
           this.state.lastCycleResults.push(result);
