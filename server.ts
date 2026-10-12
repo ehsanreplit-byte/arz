@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { GoogleGenAI } from '@google/genai';
@@ -2121,18 +2122,36 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
   // ==========================================================================
   // 6. Vite Dev Middleware / Production Static Assets
   // ==========================================================================
-  if (process.env.NODE_ENV !== 'production') {
+  // Resolve the built client relative to the project root (works on Render,
+  // where the repo is checked out at /opt/render/project/src).
+  const distPath = path.join(process.cwd(), 'dist');
+  const distIndex = path.join(distPath, 'index.html');
+  const hasBuiltAssets = fs.existsSync(distIndex);
+
+  if (process.env.NODE_ENV === 'production' && hasBuiltAssets) {
+    app.use(express.static(distPath));
+    app.get('*', (_req, res) => {
+      res.sendFile(distIndex);
+    });
+  } else {
+    // No production bundle available (e.g. the build step was skipped) — serve
+    // the app through Vite middleware instead of crashing with ENOENT.
+    if (process.env.NODE_ENV === 'production') {
+      console.warn(
+        '[server] dist/index.html not found — falling back to Vite middleware. ' +
+          'Set the Render build command to: npm install --include=dev && npm run build'
+      );
+    }
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        allowedHosts: true,
+        hmr: false,
+        watch: null,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
