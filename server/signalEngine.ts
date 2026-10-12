@@ -46,6 +46,9 @@ export interface SignalCycleSymbolResult {
   consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE';
   qualified: boolean;
   recorded: boolean;
+  /** true when the signal was handed over to the trade engine right away */
+  dispatchedToTrade?: boolean;
+  tradeNote?: string;
   chatGptStatus: string;
   aiEngineUsed: string;
   error?: string;
@@ -69,6 +72,7 @@ export interface SignalEngineState {
   currentIndex: number;
   totalSymbols: number;
   registeredLastCycle: number;
+  dispatchedLastCycle: number;
   evaluatedLastCycle: number;
   lastCycleResults: SignalCycleSymbolResult[];
 }
@@ -372,6 +376,7 @@ class SignalEngine {
     currentIndex: 0,
     totalSymbols: 0,
     registeredLastCycle: 0,
+    dispatchedLastCycle: 0,
     evaluatedLastCycle: 0,
     lastCycleResults: [],
   };
@@ -434,6 +439,7 @@ class SignalEngine {
     cycleNumber?: number;
     evaluated?: number;
     registered?: number;
+    dispatched?: number;
     durationMs?: number;
   }> {
     if (this.state.isRunning) {
@@ -456,6 +462,7 @@ class SignalEngine {
 
       let registered = 0;
       let evaluated = 0;
+      let dispatched = 0;
 
       for (let i = 0; i < symbols.length; i++) {
         const sym = symbols[i];
@@ -475,6 +482,8 @@ class SignalEngine {
           consensusDirection: 'NO TRADE',
           qualified: false,
           recorded: false,
+          dispatchedToTrade: false,
+          tradeNote: '',
           chatGptStatus: 'در انتظار',
           aiEngineUsed: '—',
         };
@@ -568,9 +577,37 @@ class SignalEngine {
             cycleNumber,
           };
 
-          await dbRepo.addRegisteredSignal(payload);
+          const savedSignal = await dbRepo.addRegisteredSignal(payload);
           result.recorded = true;
-          if (isQualified) registered += 1;
+
+          if (isQualified) {
+            registered += 1;
+
+            // ---- DIRECT LINK: hand the qualified signal to the trade engine ----
+            try {
+              const { tradeEngine } = await import('./tradeEngine.js');
+              const ingest = await tradeEngine.ingestSignal(savedSignal);
+              result.dispatchedToTrade = true;
+              result.tradeNote = ingest.note;
+              dispatched += 1;
+            } catch (linkErr: any) {
+              result.dispatchedToTrade = false;
+              result.tradeNote = linkErr?.message || 'ارسال سیگنال به موتور ترید ناموفق بود.';
+              console.warn('[signals] trade hand-off failed:', result.tradeNote);
+            }
+
+            // remember the hand-off outcome on the stored signal so the
+            // signals table can show it
+            try {
+              await dbRepo.markSignalDispatched(
+                savedSignal._id,
+                Boolean(result.dispatchedToTrade),
+                result.tradeNote || ''
+              );
+            } catch {
+              // non fatal
+            }
+          }
 
           evaluated += 1;
           this.state.lastCycleResults.push(result);
@@ -587,6 +624,7 @@ class SignalEngine {
 
       const durationMs = Date.now() - startedAt;
       this.state.registeredLastCycle = registered;
+      this.state.dispatchedLastCycle = dispatched;
       this.state.evaluatedLastCycle = evaluated;
       this.state.lastDurationMs = durationMs;
       this.state.lastFinishedAt = new Date().toISOString();
@@ -601,10 +639,10 @@ class SignalEngine {
       console.log(
         `[signals] cycle #${cycleNumber} (${trigger}) finished in ${Math.round(
           durationMs / 1000
-        )}s — evaluated ${evaluated}, registered ${registered}`
+        )}s — evaluated ${evaluated}, registered ${registered}, sent to trade ${dispatched}`
       );
 
-      return { ok: true, cycleNumber, evaluated, registered, durationMs };
+      return { ok: true, cycleNumber, evaluated, registered, dispatched, durationMs };
     } catch (err: any) {
       this.state.isRunning = false;
       this.state.lastError = err?.message || 'خطای غیرمنتظره در چرخه سیگنال';
