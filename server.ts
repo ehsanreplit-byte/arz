@@ -96,6 +96,30 @@ async function startServer() {
 
   // Initialize MongoDB connection & Telegram Direct Long Polling Worker
   await dbRepo.connectMongo();
+
+  // Atlas can be slow to answer on a cold start, which used to leave the app
+  // permanently on the disk mirror. Retry quietly in the background until the
+  // remote store is reachable (reads merge both stores, so this is safe).
+  if (!dbRepo.isRemoteReady()) {
+    const retry = (attempt: number): void => {
+      const delay = Math.min(30_000 * attempt, 300_000);
+      setTimeout(() => {
+        void (async () => {
+          try {
+            await dbRepo.connectMongo();
+            if (dbRepo.isRemoteReady()) {
+              console.log('[db] MongoDB connected on background retry.');
+              return;
+            }
+          } catch {
+            /* keep retrying */
+          }
+          if (attempt < 20) retry(attempt + 1);
+        })();
+      }, delay);
+    };
+    retry(1);
+  }
   await telegramWorker.initialize();
   signalEngine.initialize();
   tradeEngine.initialize();
@@ -2238,7 +2262,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         };
       });
 
-      res.json({ positions: enriched });
+      res.json({ positions: enriched, userId, totalKnown: positions.length });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در خواندن پوزیشن‌ها' });
     }
