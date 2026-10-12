@@ -20,6 +20,7 @@ import {
   Menu,
   X,
   Sparkles,
+  Activity,
 } from 'lucide-react';
 import {
   apiClient,
@@ -34,8 +35,9 @@ import { BinanceMarketPage, LiveTickerData } from './components/BinanceLiveTicke
 import { TelegramBotManager } from './components/TelegramBotManager';
 import { ChatGptAvalAIManager } from './components/ChatGptAvalAIManager';
 import { DatabaseSettings } from './components/DatabaseSettings';
+import { SignalsPanel } from './components/SignalsPanel';
 
-type ActiveMenu = 'dashboard' | 'binance' | 'telegram' | 'chatgpt' | 'database';
+type ActiveMenu = 'dashboard' | 'binance' | 'signals' | 'telegram' | 'chatgpt' | 'database';
 
 const WS_ENDPOINTS = [
   'wss://stream.binance.com:9443/stream?streams=',
@@ -241,6 +243,7 @@ export default function App() {
   }[] = [
     { id: 'dashboard', label: 'پیشخوان مدیریت', icon: LayoutDashboard },
     { id: 'binance', label: 'قیمت لحظه‌ای بایننس', icon: LineChart, badge: symbols.length },
+    { id: 'signals', label: 'سیگنال‌ها', icon: Activity },
     {
       id: 'telegram',
       label: 'اتصال مستقیم ربات تلگرام',
@@ -691,6 +694,9 @@ export default function App() {
               onReconnectWs={() => setWsRetryCount((c) => c + 1)}
             />
           )}
+
+          {/* View 2B: Consensus Signals Engine (سیگنال‌ها) */}
+          {activeMenu === 'signals' && <SignalsPanel />}
 
           {/* View 3: Direct Telegram Bot Connection & Message Inbox */}
           {activeMenu === 'telegram' && <TelegramBotManager tickers={tickers} />}
