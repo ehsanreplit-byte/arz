@@ -334,7 +334,121 @@ export const apiClient = {
       body: JSON.stringify(payload),
     });
   },
+
+  // Signals Engine API (سیگنال‌ها)
+  async getSignals(): Promise<{ signals: RegisteredSignalInfo[] }> {
+    return requestJson<{ signals: RegisteredSignalInfo[] }>('/api/signals');
+  },
+
+  async getSignalsStatus(): Promise<{ status: SignalEngineStatus }> {
+    return requestJson<{ status: SignalEngineStatus }>('/api/signals/status');
+  },
+
+  async runSignalsNow(): Promise<{ ok: boolean; message: string }> {
+    return requestJson<{ ok: boolean; message: string }>('/api/signals/run-now', {
+      method: 'POST',
+    });
+  },
+
+  async toggleSignalsScheduler(enabled?: boolean): Promise<{
+    ok: boolean;
+    isSchedulerEnabled: boolean;
+    status: SignalEngineStatus;
+  }> {
+    return requestJson('/api/signals/toggle-scheduler', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+  },
+
+  async deleteSignal(id: string): Promise<{ ok: boolean; signals: RegisteredSignalInfo[] }> {
+    return requestJson<{ ok: boolean; signals: RegisteredSignalInfo[] }>(
+      `/api/signals/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async clearSignals(): Promise<{ ok: boolean; signals: RegisteredSignalInfo[] }> {
+    return requestJson<{ ok: boolean; signals: RegisteredSignalInfo[] }>('/api/signals', {
+      method: 'DELETE',
+    });
+  },
 };
+
+export interface SignalMethodItem {
+  id: string;
+  title: string;
+  direction: 'LONG' | 'SHORT' | 'NO TRADE';
+  setupName: string;
+  score: number;
+  entryPrice?: number;
+  stopLoss?: number;
+  takeProfit1?: number;
+  takeProfit2?: number;
+}
+
+export interface RegisteredSignalInfo {
+  _id: string;
+  symbol: string;
+  label: string;
+  interval: string;
+  consensusDirection: 'LONG' | 'SHORT';
+  buySignalsCount: number;
+  sellSignalsCount: number;
+  totalSignalsChecked: number;
+  matchedSignalsCount: number;
+  currentPrice: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  riskRewardRatio: string;
+  averageScore: number;
+  signalsBreakdown: SignalMethodItem[];
+  chatGptStatus: string;
+  chatGptDirection: 'LONG' | 'SHORT' | 'NO TRADE';
+  chatGptSetupName: string;
+  chatGptReasoning: string;
+  aiEngineUsed: string;
+  cycleNumber: number;
+  createdAt: string;
+}
+
+export interface SignalCycleSymbolResult {
+  symbol: string;
+  label: string;
+  buySignalsCount: number;
+  sellSignalsCount: number;
+  totalSignalsChecked: number;
+  matchedSignalsCount: number;
+  consensusDirection: 'LONG' | 'SHORT' | null;
+  registered: boolean;
+  chatGptStatus: string;
+  aiEngineUsed: string;
+  error?: string;
+}
+
+export interface SignalEngineStatus {
+  isRunning: boolean;
+  isSchedulerEnabled: boolean;
+  cycleNumber: number;
+  timeframe: string;
+  htfTimeframe: string;
+  minConsensus: number;
+  requestGapMs: number;
+  cycleIntervalMs: number;
+  lastRunAt: string | null;
+  lastFinishedAt: string | null;
+  nextRunAt: string | null;
+  lastDurationMs: number | null;
+  lastError: string | null;
+  currentSymbol: string | null;
+  currentIndex: number;
+  totalSymbols: number;
+  registeredLastCycle: number;
+  evaluatedLastCycle: number;
+  lastCycleResults: SignalCycleSymbolResult[];
+}
 
 export interface AlBrooksSignalInfo {
   symbol: string;
