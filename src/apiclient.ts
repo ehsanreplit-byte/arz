@@ -394,8 +394,14 @@ export const apiClient = {
   },
 
   // Trade Engine API (ترید)
-  async getPositions(): Promise<{ positions: PositionInfo[] }> {
-    return requestJson<{ positions: PositionInfo[] }>('/api/trade/positions');
+  async getPositions(): Promise<{
+    positions: PositionInfo[];
+    userId?: string;
+    totalKnown?: number;
+  }> {
+    return requestJson<{ positions: PositionInfo[]; userId?: string; totalKnown?: number }>(
+      '/api/trade/positions'
+    );
   },
 
   async getTradeStatus(): Promise<{ status: TradeEngineStatus }> {
@@ -537,6 +543,8 @@ export interface TradeEngineStatus {
   lastIngestAt: string | null;
   lastIngestCreated: number;
   lastIngestNote: string | null;
+  /** every user key the engine currently serves */
+  knownUserIds: string[];
   lastTickSummary: TradeTickSummary;
 }
 
