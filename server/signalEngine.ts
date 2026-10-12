@@ -7,8 +7,8 @@
  *    with a 30 second gap between consecutive requests.
  * 3. Run the deterministic Al Brooks 6-method price action engine locally and
  *    count how many of the 6 signals are BUY (LONG) vs SELL (SHORT).
- * 4. Any symbol that issued at least 3 buy or at least 3 sell signals across
- *    all 6 signals is registered as a consensus signal in the database.
+ * 4. Any symbol that issued at least 2 buy or at least 2 sell signals across
+ *    all 6 signals is registered as a consensus (qualified) signal.
  */
 
 import { dbRepo, IRegisteredSignal, ISignalMethodItem } from './models.js';
@@ -31,7 +31,7 @@ const REQUEST_GAP_MS = Math.max(
 );
 const SIGNAL_TIMEFRAME = (process.env.SIGNAL_TIMEFRAME || '15m').trim();
 const HTF_TIMEFRAME = (process.env.SIGNAL_HTF_TIMEFRAME || '1h').trim();
-const MIN_CONSENSUS = Math.max(1, Number(process.env.SIGNAL_MIN_CONSENSUS || 3));
+const MIN_CONSENSUS = Math.max(1, Number(process.env.SIGNAL_MIN_CONSENSUS || 2));
 const AI_ENABLED = process.env.SIGNAL_AI_ENABLED !== 'false';
 const AI_TIMEOUT_MS = Number(process.env.SIGNAL_AI_TIMEOUT_MS || 25_000);
 const RUN_ON_BOOT = process.env.SIGNAL_RUN_ON_BOOT === 'true';
