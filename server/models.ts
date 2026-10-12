@@ -507,8 +507,8 @@ class DatabaseEngine {
         await mongoose.disconnect();
       }
       await mongoose.connect(targetUri, {
-        serverSelectionTimeoutMS: 4000,
-        connectTimeoutMS: 4000,
+        serverSelectionTimeoutMS: 10000,
+        connectTimeoutMS: 10000,
       });
       this.isMongoConnected = true;
       this.activeUri = targetUri;
@@ -561,6 +561,45 @@ class DatabaseEngine {
       if (configCount === 0 && this.store.telegramConfig) {
         const { _id, ...rest } = this.store.telegramConfig;
         await TelegramConfigModel.create(rest);
+      }
+
+      // Demo trading data must be mirrored too. Without this, everything that
+      // was written while MongoDB was still connecting stayed only in the disk
+      // mirror and disappeared as soon as reads switched over to MongoDB.
+      const acctCount = await TradeAccountModel.countDocuments();
+      if (acctCount === 0 && Array.isArray(this.store.tradeAccounts)) {
+        for (const a of this.store.tradeAccounts) {
+          const { _id, ...rest } = a;
+          await TradeAccountModel.updateOne(
+            { userId: a.userId },
+            { $setOnInsert: rest },
+            { upsert: true }
+          );
+        }
+      }
+
+      const posCount = await PositionModel.countDocuments();
+      if (posCount === 0 && Array.isArray(this.store.positions)) {
+        for (const p of this.store.positions) {
+          const { _id, ...rest } = p;
+          await PositionModel.updateOne(
+            { userId: p.userId, signalId: p.signalId },
+            { $setOnInsert: rest },
+            { upsert: true }
+          );
+        }
+      }
+
+      const sigCount = await RegisteredSignalModel.countDocuments();
+      if (sigCount === 0 && Array.isArray(this.store.registeredSignals)) {
+        for (const s of this.store.registeredSignals) {
+          const { _id, ...rest } = s;
+          await RegisteredSignalModel.updateOne(
+            { _id: s._id },
+            { $setOnInsert: { ...rest, _id: s._id } },
+            { upsert: true }
+          );
+        }
       }
     } catch (err) {
       console.error('Error syncing collections to remote MongoDB:', err);
@@ -619,11 +658,23 @@ class DatabaseEngine {
   }
 
   public async getAllUsers(): Promise<Omit<IAdminUser, 'passwordHash'>[]> {
-    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
-      const docs = await AdminUserModel.find().sort({ createdAt: -1 }).lean();
-      return docs.map(({ passwordHash, ...rest }) => ({ ...rest, _id: String(rest._id) }));
+    const byId = new Map<string, Omit<IAdminUser, 'passwordHash'>>();
+    for (const u of this.store.users || []) {
+      const { passwordHash, ...rest } = u;
+      if (rest?._id) byId.set(String(rest._id), rest);
     }
-    return this.store.users.map(({ passwordHash, ...rest }) => rest);
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const docs = await AdminUserModel.find().sort({ createdAt: -1 }).lean();
+        for (const doc of docs) {
+          const { passwordHash, ...rest } = doc as any;
+          byId.set(String(rest._id), { ...rest, _id: String(rest._id) });
+        }
+      } catch {
+        /* fall back to the disk mirror */
+      }
+    }
+    return [...byId.values()];
   }
 
   public async createUser(data: { name: string; email: string; passwordHash: string; role?: string }): Promise<IAdminUser> {
@@ -886,6 +937,25 @@ class DatabaseEngine {
   // Registered Multi-Signals (>= 3 Buy or Sell Signals on 15m) Operations
   // ==========================================================================
   public async getRegisteredSignals(): Promise<IRegisteredSignal[]> {
+    // union of Mongo + disk mirror, newest first
+    const byId = new Map<string, IRegisteredSignal>();
+    for (const s of Array.isArray(this.store.registeredSignals) ? this.store.registeredSignals : []) {
+      byId.set(s._id, s);
+    }
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(1200).lean();
+        for (const d of docs) byId.set(String((d as any)._id), { ...(d as any), _id: String((d as any)._id) });
+      } catch {
+        /* ignore */
+      }
+    }
+    return [...byId.values()].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  private async getRegisteredSignalsLegacy(): Promise<IRegisteredSignal[]> {
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
       const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(1200).lean();
       return docs.map((d) => ({ ...d, _id: String(d._id) }));
@@ -979,14 +1049,53 @@ class DatabaseEngine {
   // ==========================================================================
   // Virtual Demo Trading Account (100 USD) Operations
   // ==========================================================================
+  /** True when the remote MongoDB store is actually usable right now. */
+  public isRemoteReady(): boolean {
+    return this.isMongoConnected && mongoose.connection.readyState === 1;
+  }
+
   public async getTradeAccount(userId: string): Promise<ITradeAccount | null> {
+    // Read BOTH sources and keep the freshest record. MongoDB can connect after
+    // data was written to the disk mirror (or drop later), and reading only one
+    // of them made existing accounts / positions look like they vanished.
+    const fromDisk =
+      (Array.isArray(this.store.tradeAccounts) ? this.store.tradeAccounts : []).find(
+        (a) => a.userId === userId
+      ) || null;
+
+    let fromMongo: ITradeAccount | null = null;
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
-      const doc = await TradeAccountModel.findOne({ userId }).lean();
-      if (doc) return { ...(doc as any), _id: String(doc._id) };
-      return null;
+      try {
+        const doc = await TradeAccountModel.findOne({ userId }).lean();
+        if (doc) fromMongo = { ...(doc as any), _id: String(doc._id) };
+      } catch {
+        fromMongo = null;
+      }
     }
-    const list = Array.isArray(this.store.tradeAccounts) ? this.store.tradeAccounts : [];
-    return list.find((a) => a.userId === userId) || null;
+
+    if (fromDisk && fromMongo) {
+      const d = new Date(fromDisk.updatedAt || fromDisk.createdAt || 0).getTime();
+      const m = new Date(fromMongo.updatedAt || fromMongo.createdAt || 0).getTime();
+      return m >= d ? fromMongo : fromDisk;
+    }
+    return fromDisk || fromMongo;
+  }
+
+  /** Every trade-account key the engine knows about (Mongo + disk). */
+  public async getAllTradeAccountUserIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const a of Array.isArray(this.store.tradeAccounts) ? this.store.tradeAccounts : []) {
+      if (a?.userId) ids.add(String(a.userId));
+    }
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const docs = await TradeAccountModel.find().lean();
+        for (const d of docs) if ((d as any)?.userId) ids.add(String((d as any).userId));
+      } catch {
+        /* ignore */
+      }
+    }
+    return [...ids];
   }
 
   public async getOrCreateTradeAccount(userId: string): Promise<ITradeAccount> {
@@ -1063,14 +1172,37 @@ class DatabaseEngine {
   // Positions Operations
   // ==========================================================================
   public async getPositions(userId?: string): Promise<IPosition[]> {
+    // Union of the MongoDB collection and the disk mirror, newest wins on
+    // conflict. This keeps positions visible no matter which store a write
+    // happened to land in.
+    const byId = new Map<string, IPosition>();
+
+    const disk = (Array.isArray(this.store.positions) ? this.store.positions : []).filter(
+      (p) => !userId || p.userId === userId
+    );
+    for (const p of disk) byId.set(p._id, p);
+
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
-      const filter = userId ? { userId } : {};
-      const docs = await PositionModel.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
-      return docs.map((d) => ({ ...(d as any), _id: String(d._id) }));
+      try {
+        const filter = userId ? { userId } : {};
+        const docs = await PositionModel.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
+        for (const d of docs) {
+          const remote = { ...(d as any), _id: String(d._id) } as IPosition;
+          const local = byId.get(remote._id);
+          if (!local) {
+            byId.set(remote._id, remote);
+            continue;
+          }
+          const r = new Date(remote.updatedAt || remote.createdAt || 0).getTime();
+          const l = new Date(local.updatedAt || local.createdAt || 0).getTime();
+          if (r >= l) byId.set(remote._id, remote);
+        }
+      } catch {
+        /* fall back to the disk mirror only */
+      }
     }
-    const list = Array.isArray(this.store.positions) ? this.store.positions : [];
-    const filtered = userId ? list.filter((p) => p.userId === userId) : list;
-    return [...filtered].sort(
+
+    return [...byId.values()].sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
   }
