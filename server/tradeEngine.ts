@@ -1,22 +1,27 @@
 /**
  * Demo Trade Engine (موتور معاملات مجازی)
  * ---------------------------------------------------------------------------
- * Turns qualified signals (>= 2 Al Brooks signals on one side) into paper
- * positions on a $100 virtual account:
+ * Direct link with the Signals engine:
  *
- *  1. Every new qualified signal becomes a PENDING position whose entry is the
- *     signal's entry price. The position waits until the market price actually
- *     REACHES that entry level, then it fills (like a real exchange order).
- *  2. Stop loss / take profits are taken 1:1 from the signal.
- *  3. Positions open with leverage (default 5x), so the displayed profit/loss
+ *  1. The moment the Signals engine registers a QUALIFIED signal (>= 2 Al
+ *     Brooks signals on one side), it hands that signal to `ingestSignal()`
+ *     here. A PENDING order is created immediately — no waiting for a poll.
+ *  2. The PENDING order waits until the market price actually REACHES the
+ *     signal entry level, then it fills (like a real exchange order). If the
+ *     entry is already reached when the signal arrives, it fills at once.
+ *  3. Stop loss / take profits are taken 1:1 from the signal.
+ *  4. Positions open with leverage (default 5x), so the displayed profit/loss
  *     percentage on margin is the price move multiplied by the leverage.
- *  4. At TP1, 50% of the order is closed. The remaining half runs to TP2 or SL.
- *  5. Realized profit/loss is applied directly to the account balance.
+ *  5. At TP1, 50% of the order is closed. The remaining half runs to TP2 or SL.
+ *  6. Realized profit/loss is applied directly to the account balance.
+ *
+ * A periodic tick still runs as a safety net (price monitoring for pending
+ * fills, stop loss and take profit levels).
  */
 
-import { dbRepo, IPosition, IPositionFill, ITradeAccount } from './models.js';
+import { dbRepo, IPosition, IPositionFill, IRegisteredSignal, ITradeAccount } from './models.js';
 
-const POLL_INTERVAL_MS = Math.max(3000, Number(process.env.TRADE_POLL_INTERVAL_MS || 15000));
+const POLL_INTERVAL_MS = Math.max(3000, Number(process.env.TRADE_POLL_INTERVAL_MS || 10000));
 const DEFAULT_LEVERAGE = Math.max(1, Number(process.env.TRADE_LEVERAGE || 5));
 const TP1_CLOSE_PCT = Math.min(100, Math.max(1, Number(process.env.TRADE_TP1_CLOSE_PCT || 50)));
 const SIGNAL_MAX_AGE_MS = Math.max(
@@ -24,6 +29,24 @@ const SIGNAL_MAX_AGE_MS = Math.max(
   Number(process.env.TRADE_SIGNAL_MAX_AGE_MS || 35 * 60 * 1000)
 );
 const MIN_MARGIN_USD = Number(process.env.TRADE_MIN_MARGIN_USD || 1);
+/** Tolerance around the entry level (percent) so an entry sitting exactly on
+ *  the market price still fills instead of waiting for a fresh touch. */
+const ENTRY_TOLERANCE_PCT =
+  Math.max(0, Number(process.env.TRADE_ENTRY_TOLERANCE_PCT ?? 0.02)) / 100;
+
+export interface TradeTickSummary {
+  pendingCreated: number;
+  filled: number;
+  partiallyClosed: number;
+  closed: number;
+}
+
+export interface IngestedSignalInfo {
+  signalId: string;
+  symbol: string;
+  side: 'LONG' | 'SHORT';
+  at: string;
+}
 
 export interface TradeEngineState {
   isRunning: boolean;
@@ -34,13 +57,20 @@ export interface TradeEngineState {
   lastError: string | null;
   positionsCreatedTotal: number;
   positionsClosedTotal: number;
-  lastTickSummary: {
-    pendingCreated: number;
-    filled: number;
-    partiallyClosed: number;
-    closed: number;
-  };
+  signalsIngestedTotal: number;
+  lastIngestedSignal: IngestedSignalInfo | null;
+  lastIngestAt: string | null;
+  lastIngestCreated: number;
+  lastIngestNote: string | null;
+  lastTickSummary: TradeTickSummary;
 }
+
+const emptySummary = (): TradeTickSummary => ({
+  pendingCreated: 0,
+  filled: 0,
+  partiallyClosed: 0,
+  closed: 0,
+});
 
 // ---------------------------------------------------------------------------
 // Market data
@@ -104,7 +134,12 @@ class TradeEngine {
     lastError: null,
     positionsCreatedTotal: 0,
     positionsClosedTotal: 0,
-    lastTickSummary: { pendingCreated: 0, filled: 0, partiallyClosed: 0, closed: 0 },
+    signalsIngestedTotal: 0,
+    lastIngestedSignal: null,
+    lastIngestAt: null,
+    lastIngestCreated: 0,
+    lastIngestNote: null,
+    lastTickSummary: emptySummary(),
   };
 
   public getState(): TradeEngineState {
@@ -117,11 +152,13 @@ class TradeEngine {
     // first pass shortly after boot, then on a fixed interval
     setTimeout(() => {
       void this.tick();
-    }, 6_000);
+    }, 5_000);
     this.timer = setInterval(() => {
       void this.tick();
     }, POLL_INTERVAL_MS);
-    console.log(`[trade] engine started (poll ${POLL_INTERVAL_MS}ms, leverage ${DEFAULT_LEVERAGE}x)`);
+    console.log(
+      `[trade] engine started (poll ${POLL_INTERVAL_MS}ms, leverage ${DEFAULT_LEVERAGE}x, TP1 close ${TP1_CLOSE_PCT}%)`
+    );
   }
 
   public stop(): void {
@@ -130,16 +167,143 @@ class TradeEngine {
     this.state.isRunning = false;
   }
 
-  /** Runs one full pass: create pending positions, fill them, then manage SL/TP. */
-  public async tick(): Promise<TradeEngineState['lastTickSummary']> {
-    const summary = { pendingCreated: 0, filled: 0, partiallyClosed: 0, closed: 0 };
+  // =========================================================================
+  // DIRECT LINK — called by the Signals engine the moment a signal qualifies
+  // =========================================================================
+  /**
+   * Takes a freshly registered qualified signal and immediately creates a
+   * pending order for every account. If the market price is already at the
+   * entry level the order is filled right away.
+   */
+  public async ingestSignal(
+    signal: IRegisteredSignal
+  ): Promise<{ created: number; note: string }> {
+    this.state.lastIngestedSignal = {
+      signalId: signal._id,
+      symbol: signal.symbol,
+      side: signal.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG',
+      at: new Date().toISOString(),
+    };
+    this.state.lastIngestAt = new Date().toISOString();
+    this.state.signalsIngestedTotal += 1;
+
+    const finish = (created: number, note: string) => {
+      this.state.lastIngestCreated = created;
+      this.state.lastIngestNote = note;
+      return { created, note };
+    };
+
+    if (!signal.isQualified) {
+      return finish(0, 'سیگنال واجد شرایط نبود.');
+    }
+    if (!signal.entryPrice || !signal.stopLoss || !signal.takeProfit1 || !signal.takeProfit2) {
+      return finish(0, 'نقطه ورود / حد ضرر / حد سود در سیگنال کامل نیست.');
+    }
+
+    try {
+      const prices = await fetchPrices([signal.symbol]);
+      const price = prices[signal.symbol];
+      if (!price) {
+        return finish(0, 'قیمت لحظه‌ای نماد در دسترس نبود.');
+      }
+
+      const users = await dbRepo.getAllUsers();
+      if (users.length === 0) {
+        return finish(0, 'کاربری برای حساب معاملاتی وجود ندارد.');
+      }
+
+      const side: 'LONG' | 'SHORT' =
+        signal.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG';
+      const triggerAbove = signal.entryPrice > price;
+      let created = 0;
+
+      for (const u of users) {
+        const uid = String((u as any).id || (u as any)._id || '');
+        if (!uid) continue;
+
+        const account = await dbRepo.getOrCreateTradeAccount(uid);
+        const positions = await dbRepo.getPositions(uid);
+
+        // never duplicate the same signal, and keep one active order per symbol
+        if (positions.some((p) => p.signalId === signal._id)) continue;
+        if (positions.some((p) => p.symbol === signal.symbol && p.status !== 'CLOSED')) {
+          continue;
+        }
+
+        const usedMargin = positions
+          .filter((p) => p.status === 'PENDING' || p.status === 'OPEN')
+          .reduce((acc, p) => acc + (Number(p.margin) || 0), 0);
+        const freeMargin = account.balance - usedMargin;
+        const margin = Math.min(
+          (account.balance * (account.marginPerTradePct || 20)) / 100,
+          freeMargin
+        );
+        if (margin < MIN_MARGIN_USD) continue;
+
+        const leverage = account.leverage || DEFAULT_LEVERAGE;
+        const notional = margin * leverage;
+        const quantity = notional / signal.entryPrice;
+
+        await dbRepo.createPosition({
+          userId: uid,
+          signalId: signal._id,
+          symbol: signal.symbol,
+          label: signal.label || signal.symbol,
+          side,
+          leverage,
+          status: 'PENDING',
+          triggerAbove,
+          entryTarget: signal.entryPrice,
+          entryPrice: 0,
+          stopLoss: signal.stopLoss,
+          takeProfit1: signal.takeProfit1,
+          takeProfit2: signal.takeProfit2,
+          quantity,
+          remainingQuantity: quantity,
+          notional,
+          margin,
+          realizedPnl: 0,
+          tp1Hit: false,
+          closeReason: '',
+          signalCycleNumber: signal.cycleNumber || 0,
+          aiEngineUsed: signal.aiEngineUsed || '',
+          averageScore: signal.averageScore || 0,
+          fills: [],
+          openedAt: null,
+          closedAt: null,
+        });
+
+        created += 1;
+        this.state.positionsCreatedTotal += 1;
+      }
+
+      // Immediately try to fill: if the price is already at the entry level the
+      // order becomes an OPEN position right now.
+      await this.processActivePositions();
+
+      const note =
+        created > 0
+          ? `سفارش ${side === 'LONG' ? 'خرید' : 'فروش'} برای ${signal.symbol} ساخته شد و به نقطه ورود ${signal.entryPrice} وصل شد.`
+          : 'سفارشی ساخته نشد (نماد از قبل پوزیشن فعال دارد یا مارجین آزاد کافی نیست).';
+      console.log(`[trade] ingested signal ${signal.symbol} ${side} -> created ${created}`);
+      return finish(created, note);
+    } catch (err: any) {
+      const msg = err?.message || 'خطای غیرمنتظره در دریافت سیگنال';
+      this.state.lastError = msg;
+      return finish(0, msg);
+    }
+  }
+
+  // =========================================================================
+  // Periodic safety-net tick
+  // =========================================================================
+  public async tick(): Promise<TradeTickSummary> {
+    const summary = emptySummary();
     if (this.isTicking) return summary;
     this.isTicking = true;
 
     try {
-      // ------------------------------------------------------------------
-      // 1. Make sure every admin user owns a $100 virtual account
-      // ------------------------------------------------------------------
+      // 1. make sure every admin user owns a virtual account
       const users = await dbRepo.getAllUsers();
       const accounts: ITradeAccount[] = [];
       for (const u of users) {
@@ -148,21 +312,16 @@ class TradeEngine {
         accounts.push(await dbRepo.getOrCreateTradeAccount(String(uid)));
       }
 
-      // ------------------------------------------------------------------
-      // 2. Collect recent qualified signals
-      // ------------------------------------------------------------------
+      // 2. recent qualified signals (safety net if the direct hand-off failed)
       const allSignals = await dbRepo.getRegisteredSignals();
       const now = Date.now();
       const qualifiedSignals = allSignals.filter((s) => {
         if (!s.isQualified) return false;
         if (!s.entryPrice || !s.stopLoss || !s.takeProfit1 || !s.takeProfit2) return false;
-        const age = now - new Date(s.createdAt).getTime();
-        return age <= SIGNAL_MAX_AGE_MS;
+        return now - new Date(s.createdAt).getTime() <= SIGNAL_MAX_AGE_MS;
       });
 
-      // ------------------------------------------------------------------
-      // 3. One price snapshot for every symbol we care about
-      // ------------------------------------------------------------------
+      // 3. one price snapshot for everything we care about
       const activePositions = await dbRepo.getActivePositions();
       const symbolSet = new Set<string>([
         ...qualifiedSignals.map((s) => s.symbol),
@@ -170,9 +329,7 @@ class TradeEngine {
       ]);
       const prices = await fetchPrices([...symbolSet]);
 
-      // ------------------------------------------------------------------
-      // 4. Create PENDING positions for signals not traded yet
-      // ------------------------------------------------------------------
+      // 4. create pending orders for signals that were not handed over directly
       for (const account of accounts) {
         const positions = await dbRepo.getPositions(account.userId);
         const seenSignalIds = new Set(positions.map((p) => p.signalId));
@@ -201,9 +358,6 @@ class TradeEngine {
           const notional = margin * leverage;
           const quantity = notional / sig.entryPrice;
 
-          // The order waits until the market price reaches the entry level.
-          const triggerAbove = sig.entryPrice > price;
-
           await dbRepo.createPosition({
             userId: account.userId,
             signalId: sig._id,
@@ -212,7 +366,7 @@ class TradeEngine {
             side: sig.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG',
             leverage,
             status: 'PENDING',
-            triggerAbove,
+            triggerAbove: sig.entryPrice > price,
             entryTarget: sig.entryPrice,
             entryPrice: 0,
             stopLoss: sig.stopLoss,
@@ -242,110 +396,9 @@ class TradeEngine {
         }
       }
 
-      // ------------------------------------------------------------------
-      // 5. Fill pending orders that reached their entry, then manage SL/TP
-      // ------------------------------------------------------------------
+      // 5. fill pending orders that reached entry, then manage SL/TP
       const openPositions = await dbRepo.getActivePositions();
-
-      for (const pos of openPositions) {
-        const price = prices[pos.symbol];
-        if (!price) continue;
-        const nowIso = new Date().toISOString();
-
-        // ---- PENDING -> OPEN when the entry level is reached ----
-        if (pos.status === 'PENDING') {
-          const reached = pos.triggerAbove
-            ? price >= pos.entryTarget
-            : price <= pos.entryTarget;
-          if (!reached) continue;
-
-          const entryPrice = price;
-          const quantity = pos.notional / entryPrice;
-          const fill: IPositionFill = {
-            type: 'OPEN',
-            price: entryPrice,
-            quantity,
-            pnl: 0,
-            note: `ورود در نقطه ${entryPrice} (${pos.side === 'LONG' ? 'خرید' : 'فروش'} با اهرم ${pos.leverage}x)`,
-            at: nowIso,
-          };
-          await dbRepo.updatePosition(pos._id, {
-            status: 'OPEN',
-            entryPrice,
-            quantity,
-            remainingQuantity: quantity,
-            openedAt: nowIso,
-            fills: [...(pos.fills || []), fill],
-          });
-          summary.filled += 1;
-          continue;
-        }
-
-        // ---- OPEN -> partial close at TP1 / full close at TP2 or SL ----
-        if (pos.status !== 'OPEN') continue;
-
-        const isLong = pos.side === 'LONG';
-        const slHit = isLong ? price <= pos.stopLoss : price >= pos.stopLoss;
-        const tp2Hit = isLong ? price >= pos.takeProfit2 : price <= pos.takeProfit2;
-        const tp1Hit = isLong ? price >= pos.takeProfit1 : price <= pos.takeProfit1;
-
-        const closeAll = async (exitPrice: number, reason: string) => {
-          const qty = pos.remainingQuantity;
-          const pnl = calcPnl(pos.side, pos.entryPrice, exitPrice, qty);
-          const account = await dbRepo.getOrCreateTradeAccount(pos.userId);
-          await dbRepo.updateTradeAccount(pos.userId, {
-            balance: Math.round((account.balance + pnl) * 100) / 100,
-          });
-          await dbRepo.updatePosition(pos._id, {
-            status: 'CLOSED',
-            remainingQuantity: 0,
-            realizedPnl: Math.round((pos.realizedPnl + pnl) * 100) / 100,
-            closeReason: reason,
-            closedAt: nowIso,
-            fills: [
-              ...(pos.fills || []),
-              { type: 'CLOSE', price: exitPrice, quantity: qty, pnl, note: reason, at: nowIso },
-            ],
-          });
-          summary.closed += 1;
-          this.state.positionsClosedTotal += 1;
-        };
-
-        if (slHit) {
-          await closeAll(pos.stopLoss, 'حد ضرر (Stop Loss)');
-          continue;
-        }
-        if (tp2Hit) {
-          await closeAll(pos.takeProfit2, 'حد سود دوم (TP2)');
-          continue;
-        }
-        if (tp1Hit && !pos.tp1Hit) {
-          const qty = pos.quantity * (TP1_CLOSE_PCT / 100);
-          const pnl = calcPnl(pos.side, pos.entryPrice, pos.takeProfit1, qty);
-          const account = await dbRepo.getOrCreateTradeAccount(pos.userId);
-          await dbRepo.updateTradeAccount(pos.userId, {
-            balance: Math.round((account.balance + pnl) * 100) / 100,
-          });
-          await dbRepo.updatePosition(pos._id, {
-            tp1Hit: true,
-            remainingQuantity: Math.max(0, pos.remainingQuantity - qty),
-            realizedPnl: Math.round((pos.realizedPnl + pnl) * 100) / 100,
-            closeReason: 'حد سود اول (TP1) — ۵۰٪ بسته شد',
-            fills: [
-              ...(pos.fills || []),
-              {
-                type: 'PARTIAL_CLOSE',
-                price: pos.takeProfit1,
-                quantity: qty,
-                pnl,
-                note: `بستن ${TP1_CLOSE_PCT}٪ در حد سود اول`,
-                at: nowIso,
-              },
-            ],
-          });
-          summary.partiallyClosed += 1;
-        }
-      }
+      await this.applyMarketToPositions(openPositions, prices, summary);
 
       this.state.lastTickAt = new Date().toISOString();
       this.state.lastError = null;
@@ -358,6 +411,134 @@ class TradeEngine {
       return summary;
     } finally {
       this.isTicking = false;
+    }
+  }
+
+  /** Public: monitor active positions against a fresh price snapshot. */
+  public async processActivePositions(): Promise<TradeTickSummary> {
+    const summary = emptySummary();
+    const active = await dbRepo.getActivePositions();
+    if (active.length === 0) return summary;
+    const prices = await fetchPrices([...new Set(active.map((p) => p.symbol))]);
+    await this.applyMarketToPositions(active, prices, summary);
+    return summary;
+  }
+
+  /** Fills pending orders and applies SL / TP1 / TP2 to open positions. */
+  private async applyMarketToPositions(
+    positions: IPosition[],
+    prices: Record<string, number>,
+    summary: TradeTickSummary
+  ): Promise<void> {
+    for (const original of positions) {
+      let pos = original;
+      const price = prices[pos.symbol];
+      if (!price) continue;
+      const nowIso = new Date().toISOString();
+
+      // ---- PENDING -> OPEN when the entry level is reached ----
+      if (pos.status === 'PENDING') {
+        const tol = Math.abs(pos.entryTarget) * ENTRY_TOLERANCE_PCT;
+        const reached = pos.triggerAbove
+          ? price >= pos.entryTarget - tol
+          : price <= pos.entryTarget + tol;
+        if (!reached) continue;
+
+        const entryPrice = price;
+        const quantity = pos.notional / entryPrice;
+        const fill: IPositionFill = {
+          type: 'OPEN',
+          price: entryPrice,
+          quantity,
+          pnl: 0,
+          note: `ورود در نقطه ${entryPrice} (${pos.side === 'LONG' ? 'خرید' : 'فروش'} با اهرم ${pos.leverage}x)`,
+          at: nowIso,
+        };
+        await dbRepo.updatePosition(pos._id, {
+          status: 'OPEN',
+          entryPrice,
+          quantity,
+          remainingQuantity: quantity,
+          openedAt: nowIso,
+          fills: [...(pos.fills || []), fill],
+        });
+        summary.filled += 1;
+        // keep going in this same pass with the freshly opened position, so a
+        // TP1 / SL that is already reached is handled right away
+        pos = {
+          ...pos,
+          status: 'OPEN',
+          entryPrice,
+          quantity,
+          remainingQuantity: quantity,
+          openedAt: nowIso,
+          fills: [...(pos.fills || []), fill],
+        };
+      }
+
+      if (pos.status !== 'OPEN') continue;
+
+      const isLong = pos.side === 'LONG';
+      const slHit = isLong ? price <= pos.stopLoss : price >= pos.stopLoss;
+      const tp2Hit = isLong ? price >= pos.takeProfit2 : price <= pos.takeProfit2;
+      const tp1Hit = isLong ? price >= pos.takeProfit1 : price <= pos.takeProfit1;
+
+      const closeAll = async (exitPrice: number, reason: string) => {
+        const qty = pos.remainingQuantity;
+        const pnl = calcPnl(pos.side, pos.entryPrice, exitPrice, qty);
+        const account = await dbRepo.getOrCreateTradeAccount(pos.userId);
+        await dbRepo.updateTradeAccount(pos.userId, {
+          balance: Math.round((account.balance + pnl) * 100) / 100,
+        });
+        await dbRepo.updatePosition(pos._id, {
+          status: 'CLOSED',
+          remainingQuantity: 0,
+          realizedPnl: Math.round((pos.realizedPnl + pnl) * 100) / 100,
+          closeReason: reason,
+          closedAt: nowIso,
+          fills: [
+            ...(pos.fills || []),
+            { type: 'CLOSE', price: exitPrice, quantity: qty, pnl, note: reason, at: nowIso },
+          ],
+        });
+        summary.closed += 1;
+        this.state.positionsClosedTotal += 1;
+      };
+
+      if (slHit) {
+        await closeAll(pos.stopLoss, 'حد ضرر (Stop Loss)');
+        continue;
+      }
+      if (tp2Hit) {
+        await closeAll(pos.takeProfit2, 'حد سود دوم (TP2)');
+        continue;
+      }
+      if (tp1Hit && !pos.tp1Hit) {
+        const qty = pos.quantity * (TP1_CLOSE_PCT / 100);
+        const pnl = calcPnl(pos.side, pos.entryPrice, pos.takeProfit1, qty);
+        const account = await dbRepo.getOrCreateTradeAccount(pos.userId);
+        await dbRepo.updateTradeAccount(pos.userId, {
+          balance: Math.round((account.balance + pnl) * 100) / 100,
+        });
+        await dbRepo.updatePosition(pos._id, {
+          tp1Hit: true,
+          remainingQuantity: Math.max(0, pos.remainingQuantity - qty),
+          realizedPnl: Math.round((pos.realizedPnl + pnl) * 100) / 100,
+          closeReason: 'حد سود اول (TP1) — ۵۰٪ بسته شد',
+          fills: [
+            ...(pos.fills || []),
+            {
+              type: 'PARTIAL_CLOSE',
+              price: pos.takeProfit1,
+              quantity: qty,
+              pnl,
+              note: `بستن ${TP1_CLOSE_PCT}٪ در حد سود اول`,
+              at: nowIso,
+            },
+          ],
+        });
+        summary.partiallyClosed += 1;
+      }
     }
   }
 }
