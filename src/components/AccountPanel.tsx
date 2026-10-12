@@ -336,7 +336,7 @@ export function AccountPanel() {
             درگیر نیست.
           </li>
           <li>
-            هر سیگنال <span className="font-bold text-blue-600">واجد شرایط</span> (حداقل ۳ سیگنال
+            هر سیگنال <span className="font-bold text-blue-600">واجد شرایط</span> (حداقل ۲ سیگنال
             خرید یا فروش) یک سفارش در انتظار ورود می‌سازد.
           </li>
           <li>
