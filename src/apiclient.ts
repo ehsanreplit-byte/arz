@@ -1,0 +1,465 @@
+/**
+ * Centralized RESTful API Client using fetch (`apiclient.ts`)
+ * Handles JWT token storage, Authorization headers, and JSON serialization.
+ */
+
+export interface AdminUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  createdAt?: string;
+}
+
+export interface WatchlistSymbol {
+  _id: string;
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  label: string;
+  addedBy?: string;
+  createdAt: string;
+}
+
+export interface TelegramBotStatusConfig {
+  hasToken: boolean;
+  maskedToken: string;
+  botId?: number;
+  botUsername?: string;
+  botFirstName?: string;
+  isPollingActive: boolean;
+  lastUpdateId: number;
+  lastPollAt?: string;
+  lastError?: string;
+  connectionMode: string;
+}
+
+export interface TelegramChatMessage {
+  _id: string;
+  updateId?: number;
+  chatId: string;
+  chatType?: string;
+  senderUsername?: string;
+  senderFirstName?: string;
+  senderLastName?: string;
+  text: string;
+  direction: 'incoming' | 'outgoing';
+  isRead: boolean;
+  createdAt: string;
+}
+
+export interface DatabaseStatusInfo {
+  isRemoteConnected: boolean;
+  readyState: number;
+  engineLabel: string;
+  activeUri: string;
+  configuredExternalUri: string;
+  lastError: string;
+  collections: {
+    users: number;
+    symbols: number;
+    telegramMessages: number;
+    telegramBotConfigured: boolean;
+  };
+}
+
+const TOKEN_STORAGE_KEY = 'admin_panel_jwt_token';
+
+export const tokenStorage = {
+  getToken(): string | null {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  },
+  setToken(token: string): void {
+    localStorage.setItem(TOKEN_STORAGE_KEY, token);
+  },
+  clearToken(): void {
+    localStorage.removeItem(TOKEN_STORAGE_KEY);
+  },
+};
+
+async function requestJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const token = tokenStorage.getToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((options.headers as Record<string, string>) || {}),
+  };
+
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  });
+
+  const data = await response.json().catch(() => ({}));
+
+  if (!response.ok) {
+    if (response.status === 401) {
+      tokenStorage.clearToken();
+    }
+    throw new Error(data.error || `خطای ارتباط با سرور (${response.status})`);
+  }
+
+  return data as T;
+}
+
+export const apiClient = {
+  // Auth API
+  async login(email: string, password: string): Promise<{ token: string; user: AdminUser }> {
+    const res = await requestJson<{ token: string; user: AdminUser }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    tokenStorage.setToken(res.token);
+    return res;
+  },
+
+  async register(name: string, email: string, password: string): Promise<{ token: string; user: AdminUser }> {
+    const res = await requestJson<{ token: string; user: AdminUser }>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ name, email, password }),
+    });
+    tokenStorage.setToken(res.token);
+    return res;
+  },
+
+  async getCurrentUser(): Promise<{ user: AdminUser }> {
+    return requestJson<{ user: AdminUser }>('/api/auth/me');
+  },
+
+  // Binance Watchlist API
+  async getWatchlist(): Promise<{ symbols: WatchlistSymbol[] }> {
+    return requestJson<{ symbols: WatchlistSymbol[] }>('/api/watchlist');
+  },
+
+  async addWatchlistSymbol(symbol: string, label?: string): Promise<{ symbol: WatchlistSymbol; symbols: WatchlistSymbol[] }> {
+    return requestJson<{ symbol: WatchlistSymbol; symbols: WatchlistSymbol[] }>('/api/watchlist', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, label }),
+    });
+  },
+
+  async removeWatchlistSymbol(symbol: string): Promise<{ ok: boolean; symbols: WatchlistSymbol[] }> {
+    return requestJson<{ ok: boolean; symbols: WatchlistSymbol[] }>(
+      `/api/watchlist/${encodeURIComponent(symbol)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  // Telegram Direct Bot API
+  async getTelegramStatus(): Promise<{
+    config: TelegramBotStatusConfig;
+    stats: { totalMessages: number; unreadCount: number };
+  }> {
+    return requestJson('/api/telegram/status');
+  },
+
+  async connectTelegramBot(botToken: string): Promise<{
+    ok: boolean;
+    config: TelegramBotStatusConfig;
+  }> {
+    return requestJson('/api/telegram/connect', {
+      method: 'POST',
+      body: JSON.stringify({ botToken }),
+    });
+  },
+
+  async toggleTelegramPolling(active?: boolean): Promise<{ ok: boolean; isPollingActive: boolean }> {
+    return requestJson('/api/telegram/toggle-polling', {
+      method: 'POST',
+      body: JSON.stringify({ active }),
+    });
+  },
+
+  async pollTelegramNow(): Promise<{
+    ok: boolean;
+    newCount: number;
+    messages: TelegramChatMessage[];
+    lastPollAt?: string;
+    lastError?: string;
+  }> {
+    return requestJson('/api/telegram/poll-now', {
+      method: 'POST',
+    });
+  },
+
+  async getTelegramMessages(): Promise<{ messages: TelegramChatMessage[] }> {
+    return requestJson('/api/telegram/messages');
+  },
+
+  async sendTelegramMessage(chatId: string, text: string): Promise<{
+    ok: boolean;
+    sentMessage: TelegramChatMessage;
+    messages: TelegramChatMessage[];
+  }> {
+    return requestJson('/api/telegram/send', {
+      method: 'POST',
+      body: JSON.stringify({ chatId, text }),
+    });
+  },
+
+  async markChatRead(chatId: string): Promise<{ ok: boolean; messages: TelegramChatMessage[] }> {
+    return requestJson('/api/telegram/mark-read', {
+      method: 'POST',
+      body: JSON.stringify({ chatId }),
+    });
+  },
+
+  async deleteTelegramChat(chatId: string): Promise<{ ok: boolean; messages: TelegramChatMessage[] }> {
+    return requestJson(`/api/telegram/messages/${encodeURIComponent(chatId)}`, {
+      method: 'DELETE',
+    });
+  },
+
+  // MongoDB Database Management API
+  async getDatabaseStatus(): Promise<{ status: DatabaseStatusInfo; users: AdminUser[] }> {
+    return requestJson('/api/db/status');
+  },
+
+  async connectDatabase(mongoUri: string): Promise<{
+    ok: boolean;
+    mode: string;
+    error?: string;
+    status: DatabaseStatusInfo;
+  }> {
+    return requestJson('/api/db/connect', {
+      method: 'POST',
+      body: JSON.stringify({ mongoUri }),
+    });
+  },
+
+  // AvalAI (ChatGPT - https://docs.avalai.ir/fa/) API
+  async getAvalAIConfig(): Promise<{ config: AvalAIConfigInfo }> {
+    return requestJson('/api/avalai/config');
+  },
+
+  async saveAvalAIConfig(payload: {
+    apiKey?: string;
+    baseUrl?: string;
+    modelName: string;
+    systemPrompt?: string;
+    temperature?: number;
+  }): Promise<{ ok: boolean; config: AvalAIConfigInfo }> {
+    return requestJson('/api/avalai/config', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async testAvalAIConnection(payload: {
+    apiKey?: string;
+    baseUrl?: string;
+    modelName: string;
+  }): Promise<{
+    ok: boolean;
+    reply: string;
+    confirmedModel: string;
+    latencyMs: number;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
+    config: AvalAIConfigInfo;
+  }> {
+    return requestJson('/api/avalai/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async sendAvalAIChat(payload: {
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+    modelName?: string;
+  }): Promise<{
+    ok: boolean;
+    reply: string;
+    model: string;
+    latencyMs: number;
+    usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | null;
+  }> {
+    return requestJson('/api/avalai/chat', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async analyzeAlBrooksSignal(payload: {
+    symbol: string;
+    interval: string;
+    candles: Array<{
+      time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>;
+  }): Promise<{
+    ok: boolean;
+    signal: AlBrooksSignalInfo;
+  }> {
+    return requestJson('/api/avalai/albrooks-signal', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async analyzeAlBrooks2Signal(payload: {
+    symbol: string;
+    interval: string;
+    candles: Array<{
+      time: number;
+      open: number;
+      high: number;
+      low: number;
+      close: number;
+      volume: number;
+    }>;
+    multiTimeframeCandles?: Record<
+      string,
+      Array<{
+        time: number;
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume: number;
+      }>
+    >;
+  }): Promise<{
+    ok: boolean;
+    signal2: AlBrooks2SignalInfo;
+  }> {
+    return requestJson('/api/avalai/albrooks2-signal', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+};
+
+export interface AlBrooksSignalInfo {
+  symbol: string;
+  interval: string;
+  candlesAnalyzed: number;
+  direction: 'LONG' | 'SHORT';
+  alwaysInState: string;
+  marketCycle: string;
+  setupName: string;
+  signalCandleIndex: number;
+  signalCandleTime: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  ema20Current: number;
+  swingHigh20: number;
+  swingLow20: number;
+  riskRewardRatio: string;
+  winProbability: string;
+  signalBarDescription: string;
+  reasoning: string[];
+  aiEngineUsed: string;
+  trendlines?: {
+    resistance: { startPrice: number; endPrice: number; startIndex: number; endIndex: number };
+    support: { startPrice: number; endPrice: number; startIndex: number; endIndex: number };
+  };
+}
+
+export interface AlBrooks2SignalInfo {
+  styleName: string;
+  symbol: string;
+  marketType: string;
+  interval: string;
+  candlesAnalyzed: number;
+  patternType: string;
+  patternStatus: string;
+  isValidSignal: boolean;
+  direction: 'LONG' | 'SHORT' | 'NEUTRAL';
+  scenarioDirection: 'LONG' | 'SHORT';
+  patternHigh: number;
+  patternLow: number;
+  breakoutPrice: number;
+  confirmationClosePrice: number | null;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  riskRewardRatio: string;
+  invalidationCondition: string;
+  signalStrength: string;
+  qualityScore: number;
+  touchesCount: {
+    upper: number;
+    lower: number;
+    total: number;
+  };
+  slopes: {
+    upperSlopePct: string;
+    lowerSlopePct: string;
+    isConverging: boolean;
+  };
+  wedgeLines?: {
+    upper: {
+      startTime: number;
+      endTime: number;
+      startPrice: number;
+      endPrice: number;
+    };
+    lower: {
+      startTime: number;
+      endTime: number;
+      startPrice: number;
+      endPrice: number;
+    };
+  };
+  alBrooksConfirmation: {
+    priorTrend: string;
+    signalBarAnalysis: string;
+    entryBarAnalysis: string;
+    pullbackAndFailedBreakout: string;
+    buyerSellerPressure: string;
+  };
+  bothBreakoutScenarios: {
+    upsideBreakout: string;
+    downsideBreakout: string;
+  };
+  prosReasons: string[];
+  consReasons: string[];
+  multiTimeframeRanking: Array<{
+    rank: number;
+    timeframe: string;
+    candlesAnalyzed: number;
+    patternType: string;
+    patternStatus: string;
+    statusBucket: 'در آستانه شکست' | 'شکست تأییدشده' | 'هنوز شرایط ورود ندارد';
+    direction: 'LONG' | 'SHORT' | 'NEUTRAL';
+    qualityScore: number;
+    touchesTotal: number;
+    entryPrice: number;
+    stopLoss: number;
+    takeProfit1: number;
+    takeProfit2: number;
+    riskRewardRatio: string;
+  }>;
+  finalCategorization: {
+    nearBreakout: string[];
+    confirmedBreakout: string[];
+    noEntryYet: string[];
+  };
+  aiEngineUsed: string;
+}
+
+export interface AvalAIConfigInfo {
+  hasApiKey: boolean;
+  maskedApiKey: string;
+  baseUrl: string;
+  modelName: string;
+  systemPrompt: string;
+  temperature: number;
+  lastTestStatus: 'success' | 'error' | 'untested';
+  lastTestMessage: string;
+  lastTestLatencyMs?: number;
+  lastTestedAt?: string;
+  updatedAt?: string;
+}
+
+

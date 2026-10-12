@@ -1,0 +1,6 @@
+{
+  "name": "پنل مدیریت هوشمند بایننس و تلگرام",
+  "description": "پنل مدیریت ادمین با احراز هویت JWT، دیتابیس MongoDB، رصد لحظه‌ای ارزهای بایننس (WebSocket) و مدیریت مستقیم ربات تلگرام (Long Polling)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
