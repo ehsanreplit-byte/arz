@@ -526,6 +526,17 @@ export interface TradeEngineStatus {
   lastError: string | null;
   positionsCreatedTotal: number;
   positionsClosedTotal: number;
+  /** how many qualified signals were pushed here by the signals engine */
+  signalsIngestedTotal: number;
+  lastIngestedSignal: {
+    signalId: string;
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    at: string;
+  } | null;
+  lastIngestAt: string | null;
+  lastIngestCreated: number;
+  lastIngestNote: string | null;
   lastTickSummary: TradeTickSummary;
 }
 
@@ -567,6 +578,9 @@ export interface RegisteredSignalInfo {
   aiEngineUsed: string;
   cycleNumber: number;
   createdAt: string;
+  dispatchedToTrade?: boolean;
+  tradeDispatchNote?: string;
+  tradeDispatchedAt?: string;
 }
 
 export interface SignalCycleSymbolResult {
@@ -579,6 +593,8 @@ export interface SignalCycleSymbolResult {
   consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE';
   qualified: boolean;
   recorded: boolean;
+  dispatchedToTrade?: boolean;
+  tradeNote?: string;
   chatGptStatus: string;
   aiEngineUsed: string;
   error?: string;
@@ -602,6 +618,8 @@ export interface SignalEngineStatus {
   currentIndex: number;
   totalSymbols: number;
   registeredLastCycle: number;
+  /** qualified signals pushed straight to the trade engine in the last cycle */
+  dispatchedLastCycle: number;
   evaluatedLastCycle: number;
   lastCycleResults: SignalCycleSymbolResult[];
 }
