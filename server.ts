@@ -9,6 +9,12 @@ import { createServer as createViteServer } from 'vite';
 import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
 import { signalEngine } from './server/signalEngine.js';
+import {
+  tradeEngine,
+  fetchPrices,
+  unrealizedPnl,
+  unrealizedPnlPct,
+} from './server/tradeEngine.js';
 
 const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'crypto_telegram_admin_jwt_secret_2026';
@@ -92,6 +98,7 @@ async function startServer() {
   await dbRepo.connectMongo();
   await telegramWorker.initialize();
   signalEngine.initialize();
+  tradeEngine.initialize();
 
   // ==========================================================================
   // 1. Auth Routes (JWT + bcryptjs + MongoDB)
@@ -2116,6 +2123,226 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       res.json({ ok: true, signals: [] });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی سیگنال‌ها' });
+    }
+  });
+
+  // ==========================================================================
+  // 5D. Virtual Demo Account (حساب کاربری) & Trade Engine (ترید)
+  // ==========================================================================
+  const requireUser = (req: AuthenticatedRequest): string =>
+    String(req.user?.id || req.user?.email || 'global');
+
+  async function buildAccountSnapshot(userId: string) {
+    const account = await dbRepo.getOrCreateTradeAccount(userId);
+    const positions = await dbRepo.getPositions(userId);
+    const active = positions.filter((p) => p.status === 'PENDING' || p.status === 'OPEN');
+    const open = active.filter((p) => p.status === 'OPEN');
+    const pending = active.filter((p) => p.status === 'PENDING');
+    const closed = positions.filter((p) => p.status === 'CLOSED');
+
+    const prices = await fetchPrices([...new Set(open.map((p) => p.symbol))]);
+    let unrealized = 0;
+    for (const p of open) {
+      const price = prices[p.symbol];
+      if (price) unrealized += unrealizedPnl(p, price);
+    }
+    unrealized = Math.round(unrealized * 100) / 100;
+
+    const usedMargin =
+      Math.round(
+        active.reduce((acc, p) => acc + (Number(p.margin) || 0), 0) * 100
+      ) / 100;
+    const realizedPnl = Math.round((account.balance - account.initialBalance) * 100) / 100;
+    const winCount = closed.filter((p) => (p.realizedPnl || 0) > 0).length;
+
+    return {
+      account,
+      stats: {
+        initialBalance: account.initialBalance,
+        balance: Math.round(account.balance * 100) / 100,
+        realizedPnl,
+        unrealizedPnl: unrealized,
+        equity: Math.round((account.balance + unrealized) * 100) / 100,
+        usedMargin,
+        freeMargin: Math.round((account.balance - usedMargin) * 100) / 100,
+        openPositions: open.length,
+        pendingPositions: pending.length,
+        closedPositions: closed.length,
+        winCount,
+        lossCount: closed.length - winCount,
+        winRate: closed.length > 0 ? Math.round((winCount / closed.length) * 1000) / 10 : 0,
+        leverage: account.leverage,
+        marginPerTradePct: account.marginPerTradePct,
+      },
+    };
+  }
+
+  app.get('/api/account', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      res.json(await buildAccountSnapshot(requireUser(req)));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن حساب کاربری' });
+    }
+  });
+
+  app.post('/api/account/settings', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { leverage, marginPerTradePct } = req.body as {
+        leverage?: number;
+        marginPerTradePct?: number;
+      };
+      const patch: Record<string, number> = {};
+      if (leverage !== undefined) patch.leverage = Math.min(125, Math.max(1, Number(leverage)));
+      if (marginPerTradePct !== undefined) {
+        patch.marginPerTradePct = Math.min(100, Math.max(1, Number(marginPerTradePct)));
+      }
+      await dbRepo.updateTradeAccount(requireUser(req), patch);
+      res.json(await buildAccountSnapshot(requireUser(req)));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در ذخیره تنظیمات حساب' });
+    }
+  });
+
+  app.post('/api/account/reset', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      await dbRepo.resetTradeAccount(userId);
+      res.json(await buildAccountSnapshot(userId));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در شارژ مجدد حساب' });
+    }
+  });
+
+  app.get('/api/trade/positions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      const positions = await dbRepo.getPositions(userId);
+      const active = positions.filter((p) => p.status !== 'CLOSED');
+      const prices = await fetchPrices([...new Set(active.map((p) => p.symbol))]);
+
+      const enriched = positions.map((p) => {
+        const price = prices[p.symbol] || 0;
+        const isOpen = p.status === 'OPEN';
+        const pnl = isOpen && price ? unrealizedPnl(p, price) : 0;
+        const pnlPct = isOpen && price ? unrealizedPnlPct(p, price) : 0;
+        const distanceToEntryPct =
+          p.status === 'PENDING' && price
+            ? ((price - p.entryTarget) / p.entryTarget) * 100
+            : 0;
+        return {
+          ...p,
+          currentPrice: price,
+          unrealizedPnl: Math.round(pnl * 100) / 100,
+          unrealizedPnlPct: Math.round(pnlPct * 100) / 100,
+          distanceToEntryPct: Math.round(distanceToEntryPct * 100) / 100,
+        };
+      });
+
+      res.json({ positions: enriched });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن پوزیشن‌ها' });
+    }
+  });
+
+  app.get('/api/trade/status', authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
+    res.json({ status: tradeEngine.getState() });
+  });
+
+  app.post('/api/trade/tick', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const summary = await tradeEngine.tick();
+      res.json({ ok: true, summary, status: tradeEngine.getState() });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در اجرای موتور معاملات' });
+    }
+  });
+
+  app.post('/api/trade/positions/:id/close', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      const positions = await dbRepo.getPositions(userId);
+      const pos = positions.find((p) => p._id === String(req.params.id));
+      if (!pos) {
+        res.status(404).json({ error: 'پوزیشن یافت نشد.' });
+        return;
+      }
+      if (pos.status === 'CLOSED') {
+        res.status(400).json({ error: 'این پوزیشن قبلاً بسته شده است.' });
+        return;
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // Pending order that never filled: just cancel it (no P&L).
+      if (pos.status === 'PENDING') {
+        await dbRepo.updatePosition(pos._id, {
+          status: 'CLOSED',
+          remainingQuantity: 0,
+          closeReason: 'لغو سفارش در انتظار ورود',
+          closedAt: nowIso,
+        });
+        res.json({ ok: true, positions: (await dbRepo.getPositions(userId)) });
+        return;
+      }
+
+      const prices = await fetchPrices([pos.symbol]);
+      const price = prices[pos.symbol];
+      if (!price) {
+        res.status(502).json({ error: 'قیمت لحظه‌ای این نماد در دسترس نیست.' });
+        return;
+      }
+
+      const pnl =
+        pos.side === 'LONG'
+          ? (price - pos.entryPrice) * pos.remainingQuantity
+          : (pos.entryPrice - price) * pos.remainingQuantity;
+      const rounded = Math.round(pnl * 100) / 100;
+      const account = await dbRepo.getOrCreateTradeAccount(userId);
+      await dbRepo.updateTradeAccount(userId, {
+        balance: Math.round((account.balance + rounded) * 100) / 100,
+      });
+      await dbRepo.updatePosition(pos._id, {
+        status: 'CLOSED',
+        remainingQuantity: 0,
+        realizedPnl: Math.round(((pos.realizedPnl || 0) + rounded) * 100) / 100,
+        closeReason: 'بستن دستی توسط ادمین',
+        closedAt: nowIso,
+        fills: [
+          ...(pos.fills || []),
+          {
+            type: 'CLOSE',
+            price,
+            quantity: pos.remainingQuantity,
+            pnl: rounded,
+            note: 'بستن دستی توسط ادمین',
+            at: nowIso,
+          },
+        ],
+      });
+
+      res.json({ ok: true, positions: (await dbRepo.getPositions(userId)) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در بستن پوزیشن' });
+    }
+  });
+
+  app.delete('/api/trade/positions/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      const ok = await dbRepo.deletePosition(String(req.params.id));
+      res.json({ ok, positions: await dbRepo.getPositions(userId) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در حذف پوزیشن' });
+    }
+  });
+
+  app.delete('/api/trade/positions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      await dbRepo.clearPositions(userId);
+      res.json({ ok: true, positions: [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی پوزیشن‌ها' });
     }
   });
 
