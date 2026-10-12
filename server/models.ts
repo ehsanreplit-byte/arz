@@ -85,11 +85,11 @@ export interface IRegisteredSignal {
   label: string;
   interval: string; // '15m'
   consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE'; // خرید | فروش | بدون توافق
-  isQualified: boolean; // true when matchedSignalsCount >= 3
+  isQualified: boolean; // true when matchedSignalsCount >= 2
   buySignalsCount: number;
   sellSignalsCount: number;
   totalSignalsChecked: number;
-  matchedSignalsCount: number; // >= 3 => qualified
+  matchedSignalsCount: number; // >= 2 => qualified
   currentPrice: number;
   entryPrice: number;
   stopLoss: number;
