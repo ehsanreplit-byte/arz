@@ -21,6 +21,8 @@ import {
   X,
   Sparkles,
   Activity,
+  Wallet,
+  Target,
 } from 'lucide-react';
 import {
   apiClient,
@@ -36,8 +38,18 @@ import { TelegramBotManager } from './components/TelegramBotManager';
 import { ChatGptAvalAIManager } from './components/ChatGptAvalAIManager';
 import { DatabaseSettings } from './components/DatabaseSettings';
 import { SignalsPanel } from './components/SignalsPanel';
+import { AccountPanel } from './components/AccountPanel';
+import { TradePanel } from './components/TradePanel';
 
-type ActiveMenu = 'dashboard' | 'binance' | 'signals' | 'telegram' | 'chatgpt' | 'database';
+type ActiveMenu =
+  | 'dashboard'
+  | 'binance'
+  | 'signals'
+  | 'trade'
+  | 'account'
+  | 'telegram'
+  | 'chatgpt'
+  | 'database';
 
 const WS_ENDPOINTS = [
   'wss://stream.binance.com:9443/stream?streams=',
@@ -244,6 +256,8 @@ export default function App() {
     { id: 'dashboard', label: 'پیشخوان مدیریت', icon: LayoutDashboard },
     { id: 'binance', label: 'قیمت لحظه‌ای بایننس', icon: LineChart, badge: symbols.length },
     { id: 'signals', label: 'سیگنال‌ها', icon: Activity },
+    { id: 'trade', label: 'ترید', icon: Target },
+    { id: 'account', label: 'حساب کاربری', icon: Wallet },
     {
       id: 'telegram',
       label: 'اتصال مستقیم ربات تلگرام',
@@ -697,6 +711,12 @@ export default function App() {
 
           {/* View 2B: Consensus Signals Engine (سیگنال‌ها) */}
           {activeMenu === 'signals' && <SignalsPanel />}
+
+          {/* View 2C: Virtual Demo Account (حساب کاربری) */}
+          {activeMenu === 'account' && <AccountPanel />}
+
+          {/* View 2D: Demo Trade Terminal (ترید) */}
+          {activeMenu === 'trade' && <TradePanel />}
 
           {/* View 3: Direct Telegram Bot Connection & Message Inbox */}
           {activeMenu === 'telegram' && <TelegramBotManager tickers={tickers} />}
