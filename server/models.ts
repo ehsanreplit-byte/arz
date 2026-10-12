@@ -107,6 +107,110 @@ export interface IRegisteredSignal {
   createdAt: string;
 }
 
+// ============================================================================
+// Virtual Demo Trading Account & Positions
+// ============================================================================
+export interface ITradeAccount {
+  _id: string;
+  userId: string;
+  initialBalance: number; // 100 USD virtual
+  balance: number; // realized cash
+  leverage: number; // 5x
+  marginPerTradePct: number; // % of balance locked as margin per position
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IPositionFill {
+  type: 'OPEN' | 'PARTIAL_CLOSE' | 'CLOSE';
+  price: number;
+  quantity: number;
+  pnl: number;
+  note: string;
+  at: string;
+}
+
+export interface IPosition {
+  _id: string;
+  userId: string;
+  signalId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  leverage: number;
+  status: 'PENDING' | 'OPEN' | 'CLOSED';
+  triggerAbove: boolean; // wait for price to rise (true) or fall (false) to entryTarget
+  entryTarget: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  quantity: number;
+  remainingQuantity: number;
+  notional: number;
+  margin: number;
+  realizedPnl: number;
+  tp1Hit: boolean;
+  closeReason: string;
+  signalCycleNumber: number;
+  aiEngineUsed: string;
+  averageScore: number;
+  fills: IPositionFill[];
+  createdAt: string;
+  openedAt: string | null;
+  closedAt: string | null;
+  updatedAt: string;
+}
+
+const TradeAccountSchema = new Schema<ITradeAccount & Document>({
+  userId: { type: String, required: true, unique: true, index: true },
+  initialBalance: { type: Number, default: 100 },
+  balance: { type: Number, default: 100 },
+  leverage: { type: Number, default: 5 },
+  marginPerTradePct: { type: Number, default: 20 },
+  createdAt: { type: String, default: () => new Date().toISOString() },
+  updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
+const PositionSchema = new Schema<IPosition & Document>({
+  userId: { type: String, required: true, index: true },
+  signalId: { type: String, required: true, index: true },
+  symbol: { type: String, required: true, index: true },
+  label: { type: String, default: '' },
+  side: { type: String, enum: ['LONG', 'SHORT'], required: true },
+  leverage: { type: Number, default: 5 },
+  status: { type: String, enum: ['PENDING', 'OPEN', 'CLOSED'], default: 'PENDING', index: true },
+  triggerAbove: { type: Boolean, default: false },
+  entryTarget: { type: Number, required: true },
+  entryPrice: { type: Number, default: 0 },
+  stopLoss: { type: Number, default: 0 },
+  takeProfit1: { type: Number, default: 0 },
+  takeProfit2: { type: Number, default: 0 },
+  quantity: { type: Number, default: 0 },
+  remainingQuantity: { type: Number, default: 0 },
+  notional: { type: Number, default: 0 },
+  margin: { type: Number, default: 0 },
+  realizedPnl: { type: Number, default: 0 },
+  tp1Hit: { type: Boolean, default: false },
+  closeReason: { type: String, default: '' },
+  signalCycleNumber: { type: Number, default: 0 },
+  aiEngineUsed: { type: String, default: '' },
+  averageScore: { type: Number, default: 0 },
+  fills: { type: Schema.Types.Mixed, default: [] },
+  createdAt: { type: String, default: () => new Date().toISOString() },
+  openedAt: { type: String, default: null },
+  closedAt: { type: String, default: null },
+  updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
+export const TradeAccountModel =
+  mongoose.models.TradeAccount ||
+  mongoose.model<ITradeAccount & Document>('TradeAccount', TradeAccountSchema);
+
+export const PositionModel =
+  mongoose.models.Position ||
+  mongoose.model<IPosition & Document>('Position', PositionSchema);
+
 const AdminUserSchema = new Schema<IAdminUser & Document>({
   name: { type: String, required: true, trim: true },
   email: { type: String, required: true, unique: true, lowercase: true, trim: true },
@@ -214,6 +318,8 @@ interface PersistentStoreData {
   telegramMessages: ITelegramMessage[];
   avalaiConfig?: IAvalAIConfig | null;
   registeredSignals?: IRegisteredSignal[];
+  tradeAccounts?: ITradeAccount[];
+  positions?: IPosition[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -292,6 +398,8 @@ class DatabaseEngine {
             updatedAt: now,
           },
           registeredSignals: Array.isArray(parsed.registeredSignals) ? parsed.registeredSignals : [],
+          tradeAccounts: Array.isArray(parsed.tradeAccounts) ? parsed.tradeAccounts : [],
+          positions: Array.isArray(parsed.positions) ? parsed.positions : [],
         };
         if (updatedStore.avalaiConfig && (!updatedStore.avalaiConfig.apiKey || updatedStore.avalaiConfig.apiKey === '')) {
           updatedStore.avalaiConfig.apiKey = 'aa-u0S6Ls0H00KMvWJrthbwwYMWRUzmtCCL8R1IKXK6W2KepJTw';
@@ -346,6 +454,8 @@ class DatabaseEngine {
         updatedAt: now,
       },
       registeredSignals: [],
+      tradeAccounts: [],
+      positions: [],
     };
     this.saveDiskStore(initialStore);
     return initialStore;
@@ -827,6 +937,191 @@ class DatabaseEngine {
       await RegisteredSignalModel.deleteMany({});
     }
     this.store.registeredSignals = [];
+    this.saveDiskStore();
+  }
+
+  // ==========================================================================
+  // Virtual Demo Trading Account (100 USD) Operations
+  // ==========================================================================
+  public async getTradeAccount(userId: string): Promise<ITradeAccount | null> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const doc = await TradeAccountModel.findOne({ userId }).lean();
+      if (doc) return { ...(doc as any), _id: String(doc._id) };
+      return null;
+    }
+    const list = Array.isArray(this.store.tradeAccounts) ? this.store.tradeAccounts : [];
+    return list.find((a) => a.userId === userId) || null;
+  }
+
+  public async getOrCreateTradeAccount(userId: string): Promise<ITradeAccount> {
+    const existing = await this.getTradeAccount(userId);
+    if (existing) return existing;
+
+    const now = new Date().toISOString();
+    const account: ITradeAccount = {
+      _id: generateObjectId(),
+      userId,
+      initialBalance: 100,
+      balance: 100,
+      leverage: 5,
+      marginPerTradePct: 20,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const { _id, ...payload } = account;
+      const created = await TradeAccountModel.create(payload);
+      account._id = String(created._id);
+    }
+
+    if (!Array.isArray(this.store.tradeAccounts)) this.store.tradeAccounts = [];
+    this.store.tradeAccounts.push(account);
+    this.saveDiskStore();
+    return account;
+  }
+
+  public async updateTradeAccount(
+    userId: string,
+    patch: Partial<ITradeAccount>
+  ): Promise<ITradeAccount | null> {
+    const account = await this.getOrCreateTradeAccount(userId);
+    const updated: ITradeAccount = {
+      ...account,
+      ...patch,
+      _id: account._id,
+      userId: account.userId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      await TradeAccountModel.updateOne(
+        { userId },
+        {
+          balance: updated.balance,
+          leverage: updated.leverage,
+          marginPerTradePct: updated.marginPerTradePct,
+          updatedAt: updated.updatedAt,
+        }
+      );
+    }
+
+    if (!Array.isArray(this.store.tradeAccounts)) this.store.tradeAccounts = [];
+    const idx = this.store.tradeAccounts.findIndex((a) => a.userId === userId);
+    if (idx === -1) this.store.tradeAccounts.push(updated);
+    else this.store.tradeAccounts[idx] = updated;
+    this.saveDiskStore();
+    return updated;
+  }
+
+  /** Recharges the virtual account back to its initial balance and wipes positions. */
+  public async resetTradeAccount(userId: string): Promise<ITradeAccount> {
+    const account = await this.getOrCreateTradeAccount(userId);
+    await this.clearPositions(userId);
+    return (await this.updateTradeAccount(userId, {
+      balance: account.initialBalance,
+    })) as ITradeAccount;
+  }
+
+  // ==========================================================================
+  // Positions Operations
+  // ==========================================================================
+  public async getPositions(userId?: string): Promise<IPosition[]> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const filter = userId ? { userId } : {};
+      const docs = await PositionModel.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
+      return docs.map((d) => ({ ...(d as any), _id: String(d._id) }));
+    }
+    const list = Array.isArray(this.store.positions) ? this.store.positions : [];
+    const filtered = userId ? list.filter((p) => p.userId === userId) : list;
+    return [...filtered].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  public async getActivePositions(userId?: string): Promise<IPosition[]> {
+    const all = await this.getPositions(userId);
+    return all.filter((p) => p.status === 'PENDING' || p.status === 'OPEN');
+  }
+
+  public async createPosition(
+    pos: Omit<IPosition, '_id' | 'createdAt' | 'updatedAt'> & {
+      createdAt?: string;
+      updatedAt?: string;
+    }
+  ): Promise<IPosition> {
+    const now = new Date().toISOString();
+    const newPos: IPosition = {
+      ...pos,
+      _id: generateObjectId(),
+      createdAt: pos.createdAt || now,
+      updatedAt: pos.updatedAt || now,
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const { _id, ...payload } = newPos;
+      const created = await PositionModel.create(payload);
+      newPos._id = String(created._id);
+    }
+
+    if (!Array.isArray(this.store.positions)) this.store.positions = [];
+    this.store.positions.unshift(newPos);
+    if (this.store.positions.length > 1000) {
+      // never drop active positions
+      const active = this.store.positions.filter(
+        (p) => p.status === 'PENDING' || p.status === 'OPEN'
+      );
+      const closed = this.store.positions
+        .filter((p) => p.status === 'CLOSED')
+        .slice(0, Math.max(0, 1000 - active.length));
+      this.store.positions = [...active, ...closed];
+    }
+    this.saveDiskStore();
+    return newPos;
+  }
+
+  public async updatePosition(
+    id: string,
+    patch: Partial<IPosition>
+  ): Promise<IPosition | null> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      await PositionModel.updateOne({ _id: id }, { ...patch, updatedAt: new Date().toISOString() });
+    }
+    if (!Array.isArray(this.store.positions)) this.store.positions = [];
+    const idx = this.store.positions.findIndex((p) => p._id === id);
+    if (idx === -1) return null;
+    this.store.positions[idx] = {
+      ...this.store.positions[idx],
+      ...patch,
+      _id: this.store.positions[idx]._id,
+      updatedAt: new Date().toISOString(),
+    };
+    this.saveDiskStore();
+    return this.store.positions[idx];
+  }
+
+  public async deletePosition(id: string): Promise<boolean> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      await PositionModel.deleteOne({ _id: id });
+    }
+    if (!Array.isArray(this.store.positions)) return false;
+    const prev = this.store.positions.length;
+    this.store.positions = this.store.positions.filter((p) => p._id !== id);
+    this.saveDiskStore();
+    return this.store.positions.length < prev;
+  }
+
+  public async clearPositions(userId?: string): Promise<void> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      await PositionModel.deleteMany(userId ? { userId } : {});
+    }
+    if (!Array.isArray(this.store.positions)) {
+      this.store.positions = [];
+      return;
+    }
+    this.store.positions = userId
+      ? this.store.positions.filter((p) => p.userId !== userId)
+      : [];
     this.saveDiskStore();
   }
 }
