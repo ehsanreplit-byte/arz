@@ -105,6 +105,11 @@ export interface IRegisteredSignal {
   aiEngineUsed: string;
   cycleNumber: number;
   createdAt: string;
+  /** true when this qualified signal was pushed straight to the trade engine */
+  dispatchedToTrade?: boolean;
+  /** outcome of the trade hand-off (Persian message) */
+  tradeDispatchNote?: string;
+  tradeDispatchedAt?: string;
 }
 
 // ============================================================================
@@ -300,6 +305,9 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   aiEngineUsed: { type: String, default: '' },
   cycleNumber: { type: Number, default: 1 },
   createdAt: { type: String, default: () => new Date().toISOString() },
+  dispatchedToTrade: { type: Boolean, default: false },
+  tradeDispatchNote: { type: String, default: '' },
+  tradeDispatchedAt: { type: String, default: '' },
 });
 
 export const RegisteredSignalModel =
@@ -930,6 +938,34 @@ class DatabaseEngine {
     this.store.registeredSignals = this.store.registeredSignals.filter((s) => s._id !== id);
     this.saveDiskStore();
     return this.store.registeredSignals.length < prevLen;
+  }
+
+  /** Records the outcome of the direct hand-off to the trade engine. */
+  public async markSignalDispatched(
+    id: string,
+    dispatched: boolean,
+    note: string
+  ): Promise<void> {
+    const at = new Date().toISOString();
+    if (
+      this.isMongoConnected &&
+      mongoose.connection.readyState === 1 &&
+      mongoose.Types.ObjectId.isValid(id)
+    ) {
+      await RegisteredSignalModel.findByIdAndUpdate(id, {
+        dispatchedToTrade: dispatched,
+        tradeDispatchNote: note,
+        tradeDispatchedAt: at,
+      });
+    }
+    if (!Array.isArray(this.store.registeredSignals)) return;
+    const target = this.store.registeredSignals.find((s) => s._id === id);
+    if (target) {
+      target.dispatchedToTrade = dispatched;
+      target.tradeDispatchNote = note;
+      target.tradeDispatchedAt = at;
+      this.saveDiskStore();
+    }
   }
 
   public async clearRegisteredSignals(): Promise<void> {
