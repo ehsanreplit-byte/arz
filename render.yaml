@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: arz-panel
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22.14.0"
+      - key: NODE_ENV
+        value: production
+      - key: JWT_SECRET
+        generateValue: true
+      - key: MONGODB_URI
+        sync: false
+      - key: AVALAI_API_KEY
+        sync: false
+      - key: AVALAI_BASE_URL
+        value: https://api.avalai.ir/v1
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SIGNAL_REQUEST_GAP_MS
+        value: "30000"
+      - key: SIGNAL_MIN_CONSENSUS
+        value: "3"
+      - key: SIGNAL_CYCLE_INTERVAL_MS
+        value: "1800000"
