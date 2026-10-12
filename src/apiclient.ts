@@ -373,7 +373,161 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
+
+  // Virtual Demo Account API (حساب کاربری)
+  async getAccount(): Promise<AccountSnapshot> {
+    return requestJson<AccountSnapshot>('/api/account');
+  },
+
+  async saveAccountSettings(payload: {
+    leverage?: number;
+    marginPerTradePct?: number;
+  }): Promise<AccountSnapshot> {
+    return requestJson<AccountSnapshot>('/api/account/settings', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async resetAccount(): Promise<AccountSnapshot> {
+    return requestJson<AccountSnapshot>('/api/account/reset', { method: 'POST' });
+  },
+
+  // Trade Engine API (ترید)
+  async getPositions(): Promise<{ positions: PositionInfo[] }> {
+    return requestJson<{ positions: PositionInfo[] }>('/api/trade/positions');
+  },
+
+  async getTradeStatus(): Promise<{ status: TradeEngineStatus }> {
+    return requestJson<{ status: TradeEngineStatus }>('/api/trade/status');
+  },
+
+  async runTradeTick(): Promise<{
+    ok: boolean;
+    summary: TradeTickSummary;
+    status: TradeEngineStatus;
+  }> {
+    return requestJson('/api/trade/tick', { method: 'POST' });
+  },
+
+  async closePosition(id: string): Promise<{ ok: boolean; positions: PositionInfo[] }> {
+    return requestJson<{ ok: boolean; positions: PositionInfo[] }>(
+      `/api/trade/positions/${encodeURIComponent(id)}/close`,
+      { method: 'POST' }
+    );
+  },
+
+  async deletePosition(id: string): Promise<{ ok: boolean; positions: PositionInfo[] }> {
+    return requestJson<{ ok: boolean; positions: PositionInfo[] }>(
+      `/api/trade/positions/${encodeURIComponent(id)}`,
+      { method: 'DELETE' }
+    );
+  },
+
+  async clearPositions(): Promise<{ ok: boolean; positions: PositionInfo[] }> {
+    return requestJson<{ ok: boolean; positions: PositionInfo[] }>('/api/trade/positions', {
+      method: 'DELETE',
+    });
+  },
 };
+
+export interface TradeAccountInfo {
+  _id: string;
+  userId: string;
+  initialBalance: number;
+  balance: number;
+  leverage: number;
+  marginPerTradePct: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TradeStatsInfo {
+  initialBalance: number;
+  balance: number;
+  realizedPnl: number;
+  unrealizedPnl: number;
+  equity: number;
+  usedMargin: number;
+  freeMargin: number;
+  openPositions: number;
+  pendingPositions: number;
+  closedPositions: number;
+  winCount: number;
+  lossCount: number;
+  winRate: number;
+  leverage: number;
+  marginPerTradePct: number;
+}
+
+export interface AccountSnapshot {
+  account: TradeAccountInfo;
+  stats: TradeStatsInfo;
+}
+
+export interface PositionFillInfo {
+  type: 'OPEN' | 'PARTIAL_CLOSE' | 'CLOSE';
+  price: number;
+  quantity: number;
+  pnl: number;
+  note: string;
+  at: string;
+}
+
+export interface PositionInfo {
+  _id: string;
+  userId: string;
+  signalId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  leverage: number;
+  status: 'PENDING' | 'OPEN' | 'CLOSED';
+  triggerAbove: boolean;
+  entryTarget: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  quantity: number;
+  remainingQuantity: number;
+  notional: number;
+  margin: number;
+  realizedPnl: number;
+  tp1Hit: boolean;
+  closeReason: string;
+  signalCycleNumber: number;
+  aiEngineUsed: string;
+  averageScore: number;
+  fills: PositionFillInfo[];
+  createdAt: string;
+  openedAt: string | null;
+  closedAt: string | null;
+  updatedAt: string;
+  currentPrice: number;
+  unrealizedPnl: number;
+  unrealizedPnlPct: number;
+  distanceToEntryPct: number;
+}
+
+export interface TradeTickSummary {
+  pendingCreated: number;
+  filled: number;
+  partiallyClosed: number;
+  closed: number;
+}
+
+export interface TradeEngineStatus {
+  isRunning: boolean;
+  pollIntervalMs: number;
+  leverage: number;
+  tp1ClosePct: number;
+  lastTickAt: string | null;
+  lastError: string | null;
+  positionsCreatedTotal: number;
+  positionsClosedTotal: number;
+  lastTickSummary: TradeTickSummary;
+}
 
 export interface SignalMethodItem {
   id: string;
