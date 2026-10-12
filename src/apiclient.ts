@@ -392,7 +392,8 @@ export interface RegisteredSignalInfo {
   symbol: string;
   label: string;
   interval: string;
-  consensusDirection: 'LONG' | 'SHORT';
+  consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE';
+  isQualified: boolean;
   buySignalsCount: number;
   sellSignalsCount: number;
   totalSignalsChecked: number;
@@ -421,8 +422,9 @@ export interface SignalCycleSymbolResult {
   sellSignalsCount: number;
   totalSignalsChecked: number;
   matchedSignalsCount: number;
-  consensusDirection: 'LONG' | 'SHORT' | null;
-  registered: boolean;
+  consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE';
+  qualified: boolean;
+  recorded: boolean;
   chatGptStatus: string;
   aiEngineUsed: string;
   error?: string;
