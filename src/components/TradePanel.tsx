@@ -302,6 +302,51 @@ export function TradePanel() {
           </div>
         </div>
 
+        {/* DIRECT LINK with the signals engine */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 p-3 rounded-lg bg-slate-50 border border-slate-200 text-[11px]">
+          <span className="inline-flex items-center gap-1.5 font-bold text-slate-700">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                engine?.lastIngestedSignal ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
+              }`}
+            />
+            اتصال موتور سیگنال
+          </span>
+          <span className="text-slate-600">
+            آخرین سیگنال دریافتی:{' '}
+            {engine?.lastIngestedSignal ? (
+              <b className="font-mono-tabular">
+                {engine.lastIngestedSignal.symbol}{' '}
+                <span
+                  className={
+                    engine.lastIngestedSignal.side === 'LONG'
+                      ? 'text-emerald-600'
+                      : 'text-rose-600'
+                  }
+                >
+                  {engine.lastIngestedSignal.side === 'LONG' ? 'خرید' : 'فروش'}
+                </span>
+              </b>
+            ) : (
+              <span className="text-slate-400">هنوز سیگنالی نرسیده</span>
+            )}
+          </span>
+          {engine?.lastIngestAt && (
+            <span className="text-slate-500 font-mono-tabular">{dt(engine.lastIngestAt)}</span>
+          )}
+          <span className="text-slate-600">
+            مجموع ارسال‌شده:{' '}
+            <b className="font-mono-tabular">{engine?.signalsIngestedTotal ?? 0}</b>
+          </span>
+          <span className="text-slate-600">
+            سفارش ساخته‌شده در آخرین دریافت:{' '}
+            <b className="font-mono-tabular">{engine?.lastIngestCreated ?? 0}</b>
+          </span>
+          {engine?.lastIngestNote && (
+            <span className="text-slate-500">{engine.lastIngestNote}</span>
+          )}
+        </div>
+
         {engine?.lastError && (
           <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-50 border border-amber-200">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
