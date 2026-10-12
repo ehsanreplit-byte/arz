@@ -18,7 +18,12 @@ import {
   XCircle,
   Zap,
 } from 'lucide-react';
-import { apiClient, PositionInfo, TradeEngineStatus } from '../apiclient';
+import {
+  apiClient,
+  PositionDiagnostics,
+  PositionInfo,
+  TradeEngineStatus,
+} from '../apiclient';
 
 const usd = (v: number | undefined) => {
   const n = Number(v || 0);
@@ -114,6 +119,7 @@ export function TradePanel() {
   const [positions, setPositions] = useState<PositionInfo[]>([]);
   const [engine, setEngine] = useState<TradeEngineStatus | null>(null);
   const [accountKey, setAccountKey] = useState<string | null>(null);
+  const [diag, setDiag] = useState<PositionDiagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -131,6 +137,7 @@ export function TradePanel() {
       ]);
       setPositions(posRes.positions || []);
       setAccountKey(posRes.userId || null);
+      setDiag(posRes.diagnostics || null);
       setEngine(statusRes.status);
       setError(null);
     } catch (err: any) {
@@ -477,6 +484,25 @@ export function TradePanel() {
               وقتی سیگنالی واجد شرایط شود و قیمت به نقطهٔ ورودش برسد، سفارش به‌صورت خودکار اینجا
               باز می‌شود.
             </p>
+            {diag && (
+              <div className="mt-3 inline-block text-right text-[11px] leading-6 bg-slate-50 border border-slate-200 rounded-lg p-3 font-mono-tabular">
+                <div className="font-bold text-slate-700 mb-1">وضعیت خواندن از دیتابیس</div>
+                <div className="text-slate-600">
+                  MongoDB: {diag.remoteReady ? 'متصل' : 'قطع'} · رکورد کل:{' '}
+                  {diag.remoteTotal} · مال شما: {diag.remoteMine}
+                </div>
+                <div className="text-slate-600">
+                  ذخیره‌سازی دیسک: کل {diag.diskTotal} · مال شما: {diag.diskMine}
+                </div>
+                <div className="text-slate-500 break-all">
+                  شناسهٔ شما: {accountKey || '—'}
+                </div>
+                <div className="text-slate-500 break-all">
+                  شناسه‌های موجود در پوزیشن‌ها:{' '}
+                  {diag.ownerKeys.length > 0 ? diag.ownerKeys.join(' , ') : 'هیچ'}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">
