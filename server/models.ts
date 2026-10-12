@@ -569,10 +569,11 @@ class DatabaseEngine {
       const acctCount = await TradeAccountModel.countDocuments();
       if (acctCount === 0 && Array.isArray(this.store.tradeAccounts)) {
         for (const a of this.store.tradeAccounts) {
-          const { _id, ...rest } = a;
+          // keep the SAME _id as the disk mirror, otherwise the very same row
+          // would come back twice (once per store) from the merged reader
           await TradeAccountModel.updateOne(
-            { userId: a.userId },
-            { $setOnInsert: rest },
+            { _id: a._id },
+            { $setOnInsert: { ...a, _id: a._id } },
             { upsert: true }
           );
         }
@@ -581,10 +582,9 @@ class DatabaseEngine {
       const posCount = await PositionModel.countDocuments();
       if (posCount === 0 && Array.isArray(this.store.positions)) {
         for (const p of this.store.positions) {
-          const { _id, ...rest } = p;
           await PositionModel.updateOne(
-            { userId: p.userId, signalId: p.signalId },
-            { $setOnInsert: rest },
+            { _id: p._id },
+            { $setOnInsert: { ...p, _id: p._id } },
             { upsert: true }
           );
         }
@@ -1052,6 +1052,48 @@ class DatabaseEngine {
   /** True when the remote MongoDB store is actually usable right now. */
   public isRemoteReady(): boolean {
     return this.isMongoConnected && mongoose.connection.readyState === 1;
+  }
+
+  /**
+   * Shows, for a given user key, what each storage layer holds. Used by the
+   * trade page so a "the order exists but my list is empty" situation can be
+   * diagnosed without guessing.
+   */
+  public async getPositionsDiagnostics(userId: string): Promise<{
+    remoteReady: boolean;
+    diskTotal: number;
+    diskMine: number;
+    remoteTotal: number;
+    remoteMine: number;
+    ownerKeys: string[];
+    activeUri: string;
+  }> {
+    const diskAll = Array.isArray(this.store.positions) ? this.store.positions : [];
+    const diskMine = diskAll.filter((p) => p.userId === userId);
+
+    let remoteTotal = 0;
+    let remoteMine = 0;
+    const remoteOwners: string[] = [];
+    if (this.isRemoteReady()) {
+      try {
+        remoteTotal = await PositionModel.countDocuments();
+        remoteMine = await PositionModel.countDocuments({ userId });
+        const owners = await PositionModel.distinct('userId');
+        for (const o of owners) remoteOwners.push(String(o));
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return {
+      remoteReady: this.isRemoteReady(),
+      diskTotal: diskAll.length,
+      diskMine: diskMine.length,
+      remoteTotal,
+      remoteMine,
+      ownerKeys: [...new Set([...diskAll.map((p) => String(p.userId)), ...remoteOwners])],
+      activeUri: this.maskMongoUri(this.activeUri),
+    };
   }
 
   public async getTradeAccount(userId: string): Promise<ITradeAccount | null> {
