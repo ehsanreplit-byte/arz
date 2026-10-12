@@ -3,6 +3,7 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle2,
+  MinusCircle,
   ChevronDown,
   ChevronUp,
   Clock,
@@ -118,7 +119,9 @@ export function SignalsPanel() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [search, setSearch] = useState('');
-  const [directionFilter, setDirectionFilter] = useState<'ALL' | 'LONG' | 'SHORT'>('ALL');
+  const [directionFilter, setDirectionFilter] = useState<
+    'ALL' | 'QUALIFIED' | 'LONG' | 'SHORT'
+  >('ALL');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [, forceTick] = useState(0);
   const pollRef = useRef<number | null>(null);
@@ -211,24 +214,34 @@ export function SignalsPanel() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toUpperCase();
-    return signals.filter((s) => {
-      if (directionFilter !== 'ALL' && s.consensusDirection !== directionFilter) return false;
-      if (!q) return true;
-      return (
-        s.symbol.toUpperCase().includes(q) || (s.label || '').toUpperCase().includes(q)
-      );
-    });
+    return signals
+      .filter((s) => {
+        if (directionFilter === 'QUALIFIED' && !s.isQualified) return false;
+        if (
+          (directionFilter === 'LONG' || directionFilter === 'SHORT') &&
+          s.consensusDirection !== directionFilter
+        ) {
+          return false;
+        }
+        if (!q) return true;
+        return (
+          s.symbol.toUpperCase().includes(q) || (s.label || '').toUpperCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        // Qualified rows always float to the top, then newest first.
+        if (a.isQualified !== b.isQualified) return a.isQualified ? -1 : 1;
+        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      });
   }, [signals, search, directionFilter]);
 
-  const buyCount = signals.filter((s) => s.consensusDirection === 'LONG').length;
-  const sellCount = signals.filter((s) => s.consensusDirection === 'SHORT').length;
-  const avgScore =
-    signals.length > 0
-      ? Math.round(
-          (signals.reduce((acc, s) => acc + (s.averageScore || 0), 0) / signals.length) * 10
-        ) / 10
-      : 0;
-
+  const qualifiedCount = signals.filter((s) => s.isQualified).length;
+  const buyCount = signals.filter(
+    (s) => s.isQualified && s.consensusDirection === 'LONG'
+  ).length;
+  const sellCount = signals.filter(
+    (s) => s.isQualified && s.consensusDirection === 'SHORT'
+  ).length;
   const isRunning = status?.isRunning || false;
 
   return (
@@ -248,9 +261,10 @@ export function SignalsPanel() {
               <span className="font-mono-tabular font-bold">
                 {Math.round((status?.requestGapMs || 30000) / 1000)} ثانیه
               </span>{' '}
-              ارسال می‌شود. ارزهایی که حداقل{' '}
+              ارسال می‌شود. نتیجهٔ هر ۶ سیگنال برای <span className="font-bold text-slate-900">تمام ارزهای اضافه‌شده</span> در جدول زیر
+              ثبت می‌شود و ارزهایی که حداقل{' '}
               <span className="font-bold text-blue-600">{status?.minConsensus || 3}</span> سیگنال خرید
-              یا فروش از مجموع {status?.totalSymbols ? 6 : 6} سیگنال صادر کنند، در جدول زیر ثبت می‌شوند.
+              یا فروش صادر کنند با برچسب «واجد شرایط» مشخص می‌شوند.
             </p>
           </div>
 
@@ -380,14 +394,24 @@ export function SignalsPanel() {
       {/* Summary metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
-          <div className="text-xs text-slate-500">کل سیگنال‌های ثبت‌شده</div>
+          <div className="text-xs text-slate-500">کل ارزهای بررسی‌شده</div>
           <div className="text-2xl font-extrabold text-slate-900 font-mono-tabular">
             {signals.length}
           </div>
-          <div className="text-xs text-slate-500">توافق حداقل ۳ سیگنال</div>
+          <div className="text-xs text-slate-500">از لیست قیمت لحظه‌ای</div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
-          <div className="text-xs text-slate-500">سیگنال‌های خرید (LONG)</div>
+          <div className="text-xs text-slate-500">واجد شرایط (حداقل ۳ سیگنال)</div>
+          <div className="text-2xl font-extrabold text-blue-600 font-mono-tabular">
+            {qualifiedCount}
+          </div>
+          <div className="text-xs text-blue-600 flex items-center gap-1">
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            <span>توافق تأییدشده</span>
+          </div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
+          <div className="text-xs text-slate-500">سیگنال خرید (LONG)</div>
           <div className="text-2xl font-extrabold text-emerald-600 font-mono-tabular">
             {buyCount}
           </div>
@@ -397,19 +421,12 @@ export function SignalsPanel() {
           </div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
-          <div className="text-xs text-slate-500">سیگنال‌های فروش (SHORT)</div>
+          <div className="text-xs text-slate-500">سیگنال فروش (SHORT)</div>
           <div className="text-2xl font-extrabold text-red-600 font-mono-tabular">{sellCount}</div>
           <div className="text-xs text-red-600 flex items-center gap-1">
             <TrendingDown className="w-3.5 h-3.5" />
             <span>اکثریت نزولی</span>
           </div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
-          <div className="text-xs text-slate-500">میانگین امتیاز تحلیل</div>
-          <div className="text-2xl font-extrabold text-blue-600 font-mono-tabular">
-            {avgScore}
-          </div>
-          <div className="text-xs text-slate-500">از ۱۰۰ امتیاز</div>
         </div>
       </div>
 
@@ -426,18 +443,25 @@ export function SignalsPanel() {
           />
         </div>
         <div className="flex items-center gap-1.5">
-          {(['ALL', 'LONG', 'SHORT'] as const).map((f) => (
+          {(
+            [
+              ['ALL', 'همه'],
+              ['QUALIFIED', 'واجد شرایط'],
+              ['LONG', 'خرید'],
+              ['SHORT', 'فروش'],
+            ] as const
+          ).map(([key, label]) => (
             <button
-              key={f}
+              key={key}
               type="button"
-              onClick={() => setDirectionFilter(f)}
+              onClick={() => setDirectionFilter(key)}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer ${
-                directionFilter === f
+                directionFilter === key
                   ? 'bg-blue-600 text-white border-blue-600'
                   : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
               }`}
             >
-              {f === 'ALL' ? 'همه' : f === 'LONG' ? 'خرید' : 'فروش'}
+              {label}
             </button>
           ))}
         </div>
@@ -459,11 +483,12 @@ export function SignalsPanel() {
           <div className="p-10 text-center space-y-2">
             <Target className="w-8 h-8 text-slate-300 mx-auto" />
             <p className="text-xs font-semibold text-slate-700">
-              هنوز سیگنال توافقی ثبت نشده است
+              هنوز ارزی بررسی نشده است
             </p>
             <p className="text-xs text-slate-500 max-w-lg mx-auto leading-6">
-              با دکمه «اجرای فوری چرخه» اولین ارزیابی را انجام دهید. ارزهایی که حداقل ۳ سیگنال
-              خرید یا فروش از مجموع ۶ سیگنال ال بروکس بگیرند، اینجا ثبت می‌شوند.
+              با دکمه «اجرای فوری چرخه» اولین ارزیابی را انجام دهید. تمام ارزهای لیست قیمت
+              لحظه‌ای بررسی می‌شوند و با قیمت لحظه‌ای و وضعیت ۶ سیگنال ال بروکس در این جدول
+              نمایش داده می‌شوند.
             </p>
           </div>
         ) : (
@@ -473,6 +498,9 @@ export function SignalsPanel() {
                 <tr className="bg-slate-50 border-b border-slate-200">
                   <th className="px-4 py-3 text-[11px] font-bold text-slate-600 whitespace-nowrap">
                     ارز
+                  </th>
+                  <th className="px-4 py-3 text-[11px] font-bold text-slate-600 whitespace-nowrap">
+                    وضعیت
                   </th>
                   <th className="px-4 py-3 text-[11px] font-bold text-slate-600 whitespace-nowrap">
                     جهت توافق
@@ -524,12 +552,29 @@ export function SignalsPanel() {
                   const isLong = sig.consensusDirection === 'LONG';
                   return (
                     <React.Fragment key={sig._id}>
-                      <tr className="border-b border-slate-100 hover:bg-slate-50/70">
+                      <tr
+                        className={`border-b border-slate-100 hover:bg-slate-50/70 ${
+                          sig.isQualified ? '' : 'bg-slate-50/40'
+                        }`}
+                      >
                         <td className="px-4 py-3">
                           <div className="text-xs font-bold text-slate-900">{sig.symbol}</div>
                           <div className="text-[11px] text-slate-500 truncate max-w-[160px]">
                             {sig.label}
                           </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          {sig.isQualified ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+                              <CheckCircle2 className="w-3 h-3" />
+                              واجد شرایط
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
+                              <MinusCircle className="w-3 h-3" />
+                              رد شده
+                            </span>
+                          )}
                         </td>
                         <td className="px-4 py-3">
                           <DirectionBadge direction={sig.consensusDirection} />
@@ -637,7 +682,7 @@ export function SignalsPanel() {
 
                       {isOpen && (
                         <tr className="border-b border-slate-200 bg-slate-50/60">
-                          <td colSpan={15} className="px-4 py-4 space-y-4">
+                          <td colSpan={16} className="px-4 py-4 space-y-4">
                             <div className="flex flex-wrap items-center gap-4 text-[11px] text-slate-500">
                               <span className="flex items-center gap-1.5">
                                 <Clock className="w-3.5 h-3.5" />
