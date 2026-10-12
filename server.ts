@@ -2142,12 +2142,14 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
           'Set the Render build command to: npm install --include=dev && npm run build'
       );
     }
+    const disableHmr = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
+        // Allow tunnels / platform domains (Render, Cloudflare, etc.) in dev too.
         allowedHosts: true,
-        hmr: false,
-        watch: null,
+        hmr: !disableHmr,
+        watch: disableHmr ? null : {},
       },
       appType: 'spa',
     });
