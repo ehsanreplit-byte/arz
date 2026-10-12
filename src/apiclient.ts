@@ -398,10 +398,14 @@ export const apiClient = {
     positions: PositionInfo[];
     userId?: string;
     totalKnown?: number;
+    diagnostics?: PositionDiagnostics;
   }> {
-    return requestJson<{ positions: PositionInfo[]; userId?: string; totalKnown?: number }>(
-      '/api/trade/positions'
-    );
+    return requestJson<{
+      positions: PositionInfo[];
+      userId?: string;
+      totalKnown?: number;
+      diagnostics?: PositionDiagnostics;
+    }>('/api/trade/positions');
   },
 
   async getTradeStatus(): Promise<{ status: TradeEngineStatus }> {
@@ -521,6 +525,16 @@ export interface TradeTickSummary {
   filled: number;
   partiallyClosed: number;
   closed: number;
+}
+
+export interface PositionDiagnostics {
+  remoteReady: boolean;
+  diskTotal: number;
+  diskMine: number;
+  remoteTotal: number;
+  remoteMine: number;
+  ownerKeys: string[];
+  activeUri: string;
 }
 
 export interface TradeEngineStatus {
