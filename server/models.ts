@@ -84,11 +84,12 @@ export interface IRegisteredSignal {
   symbol: string;
   label: string;
   interval: string; // '15m'
-  consensusDirection: 'LONG' | 'SHORT'; // خرید | فروش
+  consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE'; // خرید | فروش | بدون توافق
+  isQualified: boolean; // true when matchedSignalsCount >= 3
   buySignalsCount: number;
   sellSignalsCount: number;
   totalSignalsChecked: number;
-  matchedSignalsCount: number; // >= 3
+  matchedSignalsCount: number; // >= 3 => qualified
   currentPrice: number;
   entryPrice: number;
   stopLoss: number;
@@ -174,7 +175,8 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   symbol: { type: String, required: true, index: true },
   label: { type: String, required: true },
   interval: { type: String, default: '15m' },
-  consensusDirection: { type: String, enum: ['LONG', 'SHORT'], required: true },
+  consensusDirection: { type: String, enum: ['LONG', 'SHORT', 'NO TRADE'], required: true },
+  isQualified: { type: Boolean, default: false, index: true },
   buySignalsCount: { type: Number, required: true },
   sellSignalsCount: { type: Number, required: true },
   totalSignalsChecked: { type: Number, required: true },
@@ -767,7 +769,7 @@ class DatabaseEngine {
   // ==========================================================================
   public async getRegisteredSignals(): Promise<IRegisteredSignal[]> {
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
-      const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(300).lean();
+      const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(1200).lean();
       return docs.map((d) => ({ ...d, _id: String(d._id) }));
     }
     const list = Array.isArray(this.store.registeredSignals) ? this.store.registeredSignals : [];
@@ -795,8 +797,8 @@ class DatabaseEngine {
       this.store.registeredSignals = [];
     }
     this.store.registeredSignals.unshift(newSig);
-    if (this.store.registeredSignals.length > 300) {
-      this.store.registeredSignals = this.store.registeredSignals.slice(0, 300);
+    if (this.store.registeredSignals.length > 1200) {
+      this.store.registeredSignals = this.store.registeredSignals.slice(0, 1200);
     }
     this.saveDiskStore();
     return newSig;
