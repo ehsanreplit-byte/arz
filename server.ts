@@ -7,8 +7,9 @@ import { GoogleGenAI } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
 import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
+import { signalEngine } from './server/signalEngine.js';
 
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'crypto_telegram_admin_jwt_secret_2026';
 
 interface AuthenticatedRequest extends Request {
@@ -89,6 +90,7 @@ async function startServer() {
   // Initialize MongoDB connection & Telegram Direct Long Polling Worker
   await dbRepo.connectMongo();
   await telegramWorker.initialize();
+  signalEngine.initialize();
 
   // ==========================================================================
   // 1. Auth Routes (JWT + bcryptjs + MongoDB)
@@ -2056,6 +2058,63 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در تحلیل الگوی کنج سعودی / نزولی' });
+    }
+  });
+
+  // ==========================================================================
+  // 5C. Signals Engine (سیگنال‌ها) — 30m cycle on 15m timeframe, >= 3 consensus
+  // ==========================================================================
+  app.get('/api/signals', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const signals = await dbRepo.getRegisteredSignals();
+      res.json({ signals });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن سیگنال‌های ثبت‌شده' });
+    }
+  });
+
+  app.get('/api/signals/status', authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
+    res.json({ status: signalEngine.getState() });
+  });
+
+  app.post('/api/signals/run-now', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    if (signalEngine.getState().isRunning) {
+      res.status(409).json({ ok: false, error: 'یک چرخه سیگنال در حال اجراست. لطفاً منتظر بمانید.' });
+      return;
+    }
+    // Fire-and-forget: the cycle can take minutes because of the 30s AI gap.
+    void signalEngine.runCycle('manual');
+    res.json({
+      ok: true,
+      message: 'چرخه ارزیابی سیگنال‌ها آغاز شد. نتایج به‌تدریج در جدول نمایش داده می‌شوند.',
+    });
+  });
+
+  app.post('/api/signals/toggle-scheduler', authMiddleware, (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { enabled } = req.body as { enabled?: boolean };
+      const isSchedulerEnabled = signalEngine.toggleScheduler(enabled);
+      res.json({ ok: true, isSchedulerEnabled, status: signalEngine.getState() });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در تغییر وضعیت زمان‌بند سیگنال' });
+    }
+  });
+
+  app.delete('/api/signals/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const ok = await dbRepo.deleteRegisteredSignal(String(req.params.id));
+      res.json({ ok, signals: await dbRepo.getRegisteredSignals() });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در حذف سیگنال' });
+    }
+  });
+
+  app.delete('/api/signals', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      await dbRepo.clearRegisteredSignals();
+      res.json({ ok: true, signals: [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی سیگنال‌ها' });
     }
   });
 
