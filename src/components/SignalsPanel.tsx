@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
+  ArrowRightLeft,
   CheckCircle2,
   MinusCircle,
   ChevronDown,
@@ -348,6 +349,9 @@ export function SignalsPanel() {
                   } ارزیابی`
                 : 'هنوز اجرا نشده'}
             </div>
+            <div className="text-[11px] font-semibold text-emerald-600 font-mono-tabular">
+              ارسال مستقیم به ترید: {status?.dispatchedLastCycle ?? 0}
+            </div>
           </div>
         </div>
 
@@ -567,10 +571,22 @@ export function SignalsPanel() {
                         </td>
                         <td className="px-4 py-3">
                           {sig.isQualified ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
-                              <CheckCircle2 className="w-3 h-3" />
-                              واجد شرایط
-                            </span>
+                            <div className="flex flex-col items-start gap-1">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-extrabold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+                                <CheckCircle2 className="w-3 h-3" />
+                                واجد شرایط
+                              </span>
+                              {sig.dispatchedToTrade ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+                                  <ArrowRightLeft className="w-3 h-3" />
+                                  به ترید ارسال شد
+                                </span>
+                              ) : (
+                                <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                                  ارسال به ترید ثبت نشده
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-500 border border-slate-200 whitespace-nowrap">
                               <MinusCircle className="w-3 h-3" />
