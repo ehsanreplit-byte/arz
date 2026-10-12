@@ -1,7 +1,7 @@
 /**
  * Demo Trade Engine (موتور معاملات مجازی)
  * ---------------------------------------------------------------------------
- * Turns qualified signals (>= 3 Al Brooks signals on one side) into paper
+ * Turns qualified signals (>= 2 Al Brooks signals on one side) into paper
  * positions on a $100 virtual account:
  *
  *  1. Every new qualified signal becomes a PENDING position whose entry is the
