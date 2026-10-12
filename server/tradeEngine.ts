@@ -62,6 +62,8 @@ export interface TradeEngineState {
   lastIngestAt: string | null;
   lastIngestCreated: number;
   lastIngestNote: string | null;
+  /** every user key the engine currently serves (users + accounts + positions) */
+  knownUserIds: string[];
   lastTickSummary: TradeTickSummary;
 }
 
@@ -139,6 +141,7 @@ class TradeEngine {
     lastIngestAt: null,
     lastIngestCreated: 0,
     lastIngestNote: null,
+    knownUserIds: [],
     lastTickSummary: emptySummary(),
   };
 
@@ -165,6 +168,40 @@ class TradeEngine {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.state.isRunning = false;
+  }
+
+  /**
+   * Every user key the engine must serve: registered admin users PLUS anyone
+   * who already owns a trade account or a position. Without the extra sources a
+   * stale browser token (or a freshly wiped store) could leave the logged-in
+   * user out of `getAllUsers()` and their orders would never be created.
+   */
+  private async resolveUserIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    try {
+      for (const u of await dbRepo.getAllUsers()) {
+        const id = String((u as any).id || (u as any)._id || '');
+        if (id) ids.add(id);
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      for (const id of await dbRepo.getAllTradeAccountUserIds()) {
+        if (id) ids.add(String(id));
+      }
+    } catch {
+      /* ignore */
+    }
+    try {
+      for (const p of await dbRepo.getPositions()) {
+        if (p?.userId) ids.add(String(p.userId));
+      }
+    } catch {
+      /* ignore */
+    }
+    this.state.knownUserIds = [...ids];
+    return this.state.knownUserIds;
   }
 
   // =========================================================================
@@ -207,8 +244,8 @@ class TradeEngine {
         return finish(0, 'قیمت لحظه‌ای نماد در دسترس نبود.');
       }
 
-      const users = await dbRepo.getAllUsers();
-      if (users.length === 0) {
+      const userIds = await this.resolveUserIds();
+      if (userIds.length === 0) {
         return finish(0, 'کاربری برای حساب معاملاتی وجود ندارد.');
       }
 
@@ -217,8 +254,7 @@ class TradeEngine {
       const triggerAbove = signal.entryPrice > price;
       let created = 0;
 
-      for (const u of users) {
-        const uid = String((u as any).id || (u as any)._id || '');
+      for (const uid of userIds) {
         if (!uid) continue;
 
         const account = await dbRepo.getOrCreateTradeAccount(uid);
@@ -303,13 +339,11 @@ class TradeEngine {
     this.isTicking = true;
 
     try {
-      // 1. make sure every admin user owns a virtual account
-      const users = await dbRepo.getAllUsers();
+      // 1. make sure every known user owns a virtual account
       const accounts: ITradeAccount[] = [];
-      for (const u of users) {
-        const uid = (u as any).id || (u as any)._id;
+      for (const uid of await this.resolveUserIds()) {
         if (!uid) continue;
-        accounts.push(await dbRepo.getOrCreateTradeAccount(String(uid)));
+        accounts.push(await dbRepo.getOrCreateTradeAccount(uid));
       }
 
       // 2. recent qualified signals (safety net if the direct hand-off failed)
