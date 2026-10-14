@@ -2280,6 +2280,325 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
     res.json({ status: tradeEngine.getState() });
   });
 
+  // ==========================================================================
+  // Plain-text report (signals + trades with exact timestamps)
+  // ==========================================================================
+  const faTime = (iso?: string | null): string => {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '—';
+    try {
+      return new Intl.DateTimeFormat('fa-IR', {
+        timeZone: 'Asia/Tehran',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+      })
+        .format(d)
+        .replace(/[,\u060C]/g, ' ');
+    } catch {
+      return d.toISOString();
+    }
+  };
+
+  const num = (v: any, digits = 8): string =>
+    typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—';
+
+  const sideFa = (s: string): string =>
+    s === 'LONG' ? 'LONG (خرید)' : s === 'SHORT' ? 'SHORT (فروش)' : 'NO TRADE (بدون معامله)';
+
+  const statusFa = (s: string): string =>
+    s === 'PENDING'
+      ? 'PENDING (در انتظار رسیدن قیمت به نقطه ورود)'
+      : s === 'OPEN'
+      ? 'OPEN (باز)'
+      : 'CLOSED (بسته‌شده)';
+
+  app.get('/api/reports/txt', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = requireUser(req);
+      const account = await dbRepo.getOrCreateTradeAccount(userId);
+      const signals = await dbRepo.getRegisteredSignals();
+      const positions = await dbRepo.getPositions(userId);
+
+      const L: string[] = [];
+      const line = (s = '') => L.push(s);
+      const rule = (ch = '-') => line(ch.repeat(78));
+      const kv = (k: string, v: any) => line(`  ${k.padEnd(24, ' ')}: ${v}`);
+
+      const generatedAt = new Date().toISOString();
+
+      rule('=');
+      line('گزارش سیگنال‌ها و معاملات — پنل مدیریت ارز');
+      rule('=');
+      kv('زمان تولید گزارش (ISO)', generatedAt);
+      kv('زمان تولید (ایران)', faTime(generatedAt));
+      kv('شناسه کاربر', userId);
+      kv('تعداد سیگنال‌های ثبت‌شده', signals.length);
+      kv('تعداد معاملات', positions.length);
+      kv('موجودی حساب', `$ ${num(account.balance, 2)}`);
+      kv('موجودی اولیه', `$ ${num(account.initialBalance, 2)}`);
+      kv('اهرم پیش‌فرض', `${account.leverage}x`);
+      line();
+
+      const fmtSignal = (s: any, i: number) => {
+        rule('=');
+        line(`سیگنال شماره ${String(i + 1).padStart(3, '0')}`);
+        rule('=');
+        kv('زمان ثبت (ISO)', s.createdAt || '—');
+        kv('زمان ثبت (ایران)', faTime(s.createdAt));
+        kv('نماد', s.symbol);
+        kv('نام', s.label || '—');
+        kv('تایم‌فریم', s.interval || '—');
+        kv('جهت توافق', sideFa(s.consensusDirection));
+        kv('واجد شرایط', s.isQualified ? 'بله' : 'خیر');
+        kv('سیگنال خرید / فروش', `${s.buySignalsCount} / ${s.sellSignalsCount}`);
+        kv('تعداد بررسی‌شده', `${s.totalSignalsChecked} از ۶ روش`);
+        kv('تعداد سیگنال هم‌جهت', s.matchedSignalsCount);
+        kv('قیمت لحظه‌ای هنگام تحلیل', num(s.currentPrice));
+        kv('نقطه ورود', num(s.entryPrice));
+        kv('حد ضرر', num(s.stopLoss));
+        kv('حد سود ۱', num(s.takeProfit1));
+        kv('حد سود ۲', num(s.takeProfit2));
+        kv('نسبت ریسک به ریوارد', s.riskRewardRatio || '—');
+        kv('امتیاز میانگین', num(s.averageScore, 2));
+        kv('موتور هوش مصنوعی', s.aiEngineUsed || '—');
+        kv('وضعیت ChatGPT', s.chatGptStatus || '—');
+        kv('نظر ChatGPT', sideFa(s.chatGptDirection || 'NO TRADE'));
+        kv('ستاپ ChatGPT', s.chatGptSetupName || '—');
+        kv('شماره چرخه', s.cycleNumber ?? '—');
+        kv('ارسال به موتور ترید', s.dispatchedToTrade ? 'بله' : 'خیر');
+        kv('زمان ارسال به ترید (ISO)', s.tradeDispatchedAt || '—');
+        kv('زمان ارسال به ترید (ایران)', faTime(s.tradeDispatchedAt));
+        kv('پیام ارسال به ترید', s.tradeDispatchNote || '—');
+        line();
+      };
+
+      const fmtPosition = (p: any, i: number) => {
+        const totalPnl = Math.round((Number(p.realizedPnl) || 0) * 100) / 100;
+        rule('=');
+        line(`معامله شماره ${String(i + 1).padStart(3, '0')}`);
+        rule('=');
+        kv('نماد', p.symbol);
+        kv('نام', p.label || '—');
+        kv('سمت', sideFa(p.side));
+        kv('اهرم', `${p.leverage}x`);
+        kv('وضعیت', statusFa(p.status));
+        kv('شناسه سیگنال', p.signalId || '—');
+        kv('شماره چرخه سیگنال', p.signalCycleNumber ?? '—');
+        kv('موتور هوش مصنوعی', p.aiEngineUsed || '—');
+        kv('امتیاز سیگنال', num(p.averageScore, 2));
+        line();
+        kv('زمان ساخت سفارش (ISO)', p.createdAt || '—');
+        kv('زمان ساخت سفارش (ایران)', faTime(p.createdAt));
+        kv('نقطه ورود هدف', num(p.entryTarget));
+        kv('جهت انتظار قیمت', p.triggerAbove ? 'صعود تا نقطه ورود' : 'نزول تا نقطه ورود');
+        kv('زمان ورود / پر شدن (ISO)', p.openedAt || '—');
+        kv('زمان ورود / پر شدن (ایران)', faTime(p.openedAt));
+        kv('قیمت ورود نهایی', num(p.entryPrice));
+        kv('حد ضرر', num(p.stopLoss));
+        kv('حد سود ۱', num(p.takeProfit1));
+        kv('حد سود ۲', num(p.takeProfit2));
+        kv('حجم کل', num(p.quantity));
+        kv('حجم باقی‌مانده', num(p.remainingQuantity));
+        kv('مارجین', `$ ${num(p.margin, 2)}`);
+        kv('ارزش قرارداد (نوشنال)', `$ ${num(p.notional, 2)}`);
+        kv('بستن ۵۰٪ در TP1', p.tp1Hit ? 'انجام شد' : 'انجام نشده');
+        kv('زمان بستن (ISO)', p.closedAt || '—');
+        kv('زمان بستن (ایران)', faTime(p.closedAt));
+        kv('دلیل بستن', p.closeReason || '—');
+        kv('سود/زیان محقق‌شده', `$ ${num(p.realizedPnl, 2)}`);
+        kv('سود/زیان کل ثبت‌شده', `$ ${num(totalPnl, 2)}`);
+        line('  رخدادها:');
+        if (!p.fills || p.fills.length === 0) {
+          line('    (هنوز رخدادی ثبت نشده)');
+        } else {
+          for (const f of p.fills) {
+            line(
+              `    - ${f.at} | ${faTime(f.at)} | ${String(f.type).padEnd(14, ' ')} | قیمت=${num(
+                f.price
+              )} | حجم=${num(f.quantity)} | سود/زیان=${num(f.pnl, 2)} | ${f.note || ''}`
+            );
+          }
+        }
+        line();
+      };
+
+      line('بخش ۱ — سیگنال‌ها (Signals)');
+      rule('=');
+      line();
+      if (signals.length === 0) {
+        line('  هیچ سیگنالی ثبت نشده است.');
+        line();
+      } else {
+        signals.forEach((s, i) => fmtSignal(s, i));
+      }
+
+      line('بخش ۲ — معاملات (خرید و فروش)');
+      rule('=');
+      line();
+      if (positions.length === 0) {
+        line('  هیچ معامله‌ای ثبت نشده است.');
+        line();
+      } else {
+        positions.forEach((p, i) => fmtPosition(p, i));
+      }
+
+      // ---- summary ----
+      const closed = positions.filter((p) => p.status === 'CLOSED');
+      const open = positions.filter((p) => p.status === 'OPEN');
+      const pending = positions.filter((p) => p.status === 'PENDING');
+      const realized = positions.reduce((a, p) => a + (Number(p.realizedPnl) || 0), 0);
+      const wins = closed.filter((p) => (Number(p.realizedPnl) || 0) > 0).length;
+      const losses = closed.filter((p) => (Number(p.realizedPnl) || 0) < 0).length;
+
+      line('بخش ۳ — خلاصه آماری');
+      rule('=');
+      kv('سیگنال‌های واجد شرایط', signals.filter((s) => s.isQualified).length);
+      kv('سیگنال‌های ارسال‌شده به ترید', signals.filter((s) => s.dispatchedToTrade).length);
+      kv('سفارش در انتظار', pending.length);
+      kv('پوزیشن باز', open.length);
+      kv('معاملات بسته‌شده', closed.length);
+      kv('معاملات سودده', wins);
+      kv('معاملات زیان‌ده', losses);
+      kv(
+        'نرخ برد',
+        closed.length > 0 ? `${((wins / closed.length) * 100).toFixed(1)}٪` : '—'
+      );
+      kv('مجموع سود/زیان محقق‌شده', `$ ${num(realized, 2)}`);
+      kv('موجودی نهایی', `$ ${num(account.balance, 2)}`);
+      kv(
+        'بازدهی',
+        account.initialBalance
+          ? `${(((account.balance - account.initialBalance) / account.initialBalance) * 100).toFixed(
+              2
+            )}٪`
+          : '—'
+      );
+      line();
+
+      // ---- flat, machine readable block for later analysis ----
+      line('بخش ۴ — داده خام (جداشده با تب — برای تحلیل در اکسل)');
+      rule('=');
+      line();
+      line('#SIGNALS');
+      line(
+        [
+          'createdAt_ISO',
+          'createdAt_IR',
+          'symbol',
+          'timeframe',
+          'direction',
+          'qualified',
+          'buyCount',
+          'sellCount',
+          'matched',
+          'currentPrice',
+          'entry',
+          'stopLoss',
+          'tp1',
+          'tp2',
+          'score',
+          'cycle',
+          'sentToTrade',
+        ].join('\t')
+      );
+      for (const s of signals) {
+        line(
+          [
+            s.createdAt,
+            faTime(s.createdAt),
+            s.symbol,
+            s.interval,
+            s.consensusDirection,
+            s.isQualified ? 1 : 0,
+            s.buySignalsCount,
+            s.sellSignalsCount,
+            s.matchedSignalsCount,
+            s.currentPrice,
+            s.entryPrice,
+            s.stopLoss,
+            s.takeProfit1,
+            s.takeProfit2,
+            s.averageScore,
+            s.cycleNumber,
+            s.dispatchedToTrade ? 1 : 0,
+          ].join('\t')
+        );
+      }
+      line();
+      line('#TRADES');
+      line(
+        [
+          'createdAt_ISO',
+          'createdAt_IR',
+          'openedAt_ISO',
+          'openedAt_IR',
+          'closedAt_ISO',
+          'closedAt_IR',
+          'symbol',
+          'side',
+          'leverage',
+          'status',
+          'entryTarget',
+          'entryPrice',
+          'stopLoss',
+          'tp1',
+          'tp2',
+          'quantity',
+          'margin',
+          'notional',
+          'tp1Hit',
+          'realizedPnl',
+          'closeReason',
+        ].join('\t')
+      );
+      for (const p of positions) {
+        line(
+          [
+            p.createdAt,
+            faTime(p.createdAt),
+            p.openedAt || '',
+            faTime(p.openedAt),
+            p.closedAt || '',
+            faTime(p.closedAt),
+            p.symbol,
+            p.side,
+            p.leverage,
+            p.status,
+            p.entryTarget,
+            p.entryPrice,
+            p.stopLoss,
+            p.takeProfit1,
+            p.takeProfit2,
+            p.quantity,
+            p.margin,
+            p.notional,
+            p.tp1Hit ? 1 : 0,
+            p.realizedPnl,
+            (p.closeReason || '').replace(/\t/g, ' '),
+          ].join('\t')
+        );
+      }
+      line();
+      rule('=');
+      line('پایان گزارش');
+      rule('=');
+
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `arz-report-${stamp}.txt`;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send('\uFEFF' + L.join('\r\n'));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در تولید گزارش' });
+    }
+  });
+
   app.post('/api/trade/tick', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
     try {
       const summary = await tradeEngine.tick();
