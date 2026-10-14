@@ -230,6 +230,39 @@ export const apiClient = {
     });
   },
 
+  /** Downloads the plain-text signals + trades report and saves it locally. */
+  async downloadTextReport(): Promise<string> {
+    const token = tokenStorage.getToken();
+    const response = await fetch('/api/reports/txt', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!response.ok) {
+      let msg = `خطای دریافت گزارش (${response.status})`;
+      try {
+        const data = await response.json();
+        if (data?.error) msg = data.error;
+      } catch {
+        /* keep the default message */
+      }
+      throw new Error(msg);
+    }
+
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename="?([^";]+)"?/.exec(disposition);
+    const filename = match?.[1] || `arz-report-${Date.now()}.txt`;
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    return filename;
+  },
+
   // AvalAI (ChatGPT - https://docs.avalai.ir/fa/) API
   async getAvalAIConfig(): Promise<{ config: AvalAIConfigInfo }> {
     return requestJson('/api/avalai/config');
