@@ -7,6 +7,9 @@ import {
   Server,
   Shield,
   Users,
+  Download,
+  FileText,
+  Loader2,
 } from 'lucide-react';
 import { apiClient, AdminUser, DatabaseStatusInfo } from '../apiclient';
 
@@ -17,6 +20,21 @@ export function DatabaseSettings() {
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportFeedback, setReportFeedback] = useState<string | null>(null);
+
+  const handleDownloadReport = async () => {
+    setReportBusy(true);
+    setReportFeedback(null);
+    try {
+      const filename = await apiClient.downloadTextReport();
+      setReportFeedback(`گزارش با نام ${filename} دانلود شد.`);
+    } catch (err: any) {
+      setReportFeedback(err?.message || 'دانلود گزارش ناموفق بود.');
+    } finally {
+      setReportBusy(false);
+    }
+  };
 
   const fetchStatus = async () => {
     setLoading(true);
@@ -125,6 +143,51 @@ export function DatabaseSettings() {
           </div>
         </div>
       )}
+
+      {/* Plain-text report download */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+        <div className="flex items-start gap-3">
+          <div className="p-2 rounded-lg bg-blue-50 border border-blue-100">
+            <FileText className="w-5 h-5 text-blue-600" />
+          </div>
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-900">
+              دانلود گزارش سیگنال‌ها و خرید و فروش (فایل متنی txt)
+            </h3>
+            <p className="text-xs text-slate-500 leading-relaxed">
+              فایل متنی شامل تمام سیگنال‌های ثبت‌شده و تمام معاملات (خرید/فروش) به‌همراه{" "}
+              <span className="font-semibold text-slate-600">
+                ساعت دقیق هر مرحله (ثبت، رسیدن قیمت به نقطهٔ ورود، بستن حد سود / حد ضرر)
+              </span>{" "}
+              است. برای تحلیل آسان‌تر، یک بخش داده خام جداشده با تب (قابل باز کردن در اکسل) هم در
+              انتهای فایل قرار دارد.
+            </p>
+            <div className="text-[11px] text-slate-400 pt-1 leading-6">
+              شامل: زمان ISO و زمان ایران · نماد · جهت خرید/فروش · نقطه ورود · حد ضرر · حد سود ۱ و ۲
+              · اهرم · مارجین · حجم · رخدادهای پر شدن · سود/زیان محقق‌شده · موجودی نهایی
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleDownloadReport}
+            disabled={reportBusy}
+            className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-bold rounded-xl transition-colors flex items-center gap-2 whitespace-nowrap cursor-pointer"
+          >
+            {reportBusy ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span>{reportBusy ? 'در حال ساخت گزارش...' : 'دانلود گزارش txt'}</span>
+          </button>
+          {reportFeedback && (
+            <span className="text-xs font-semibold text-slate-600">{reportFeedback}</span>
+          )}
+        </div>
+      </div>
 
       {/* MongoDB URI Connection Form */}
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
