@@ -478,7 +478,11 @@ class TradeEngine {
           : price <= pos.entryTarget + tol;
         if (!reached) continue;
 
-        const entryPrice = price;
+        // Fill AT the signal entry level, not at whatever the market happens to
+        // be. If the price jumped past the entry, filling at the market would put
+        // the signal's SL/TP on the wrong side of the fill and a "take profit"
+        // could close as a loss.
+        const entryPrice = pos.entryTarget;
         const quantity = pos.notional / entryPrice;
         const fill: IPositionFill = {
           type: 'OPEN',
