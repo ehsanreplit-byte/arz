@@ -55,6 +55,16 @@ function isPullbackEntry(side: 'LONG' | 'SHORT', entry: number, price: number): 
 const ENTRY_TOLERANCE_PCT =
   Math.max(0, Number(process.env.TRADE_ENTRY_TOLERANCE_PCT ?? 0.02)) / 100;
 
+export type IngestCode =
+  | 'CREATED'
+  | 'NOT_QUALIFIED'
+  | 'INCOMPLETE_LEVELS'
+  | 'NO_PRICE'
+  | 'NO_USERS'
+  | 'BREAKOUT_REJECTED'
+  | 'SYMBOL_ACTIVE_OR_NO_MARGIN'
+  | 'ERROR';
+
 export interface TradeTickSummary {
   pendingCreated: number;
   filled: number;
@@ -83,6 +93,7 @@ export interface TradeEngineState {
   lastIngestAt: string | null;
   lastIngestCreated: number;
   lastIngestNote: string | null;
+  lastIngestCode: IngestCode | null;
   /** every user key the engine currently serves (users + accounts + positions) */
   knownUserIds: string[];
   lastTickSummary: TradeTickSummary;
@@ -162,6 +173,7 @@ class TradeEngine {
     lastIngestAt: null,
     lastIngestCreated: 0,
     lastIngestNote: null,
+    lastIngestCode: null,
     knownUserIds: [],
     lastTickSummary: emptySummary(),
   };
@@ -235,7 +247,7 @@ class TradeEngine {
    */
   public async ingestSignal(
     signal: IRegisteredSignal
-  ): Promise<{ created: number; note: string }> {
+  ): Promise<{ created: number; note: string; code: IngestCode }> {
     this.state.lastIngestedSignal = {
       signalId: signal._id,
       symbol: signal.symbol,
@@ -245,29 +257,30 @@ class TradeEngine {
     this.state.lastIngestAt = new Date().toISOString();
     this.state.signalsIngestedTotal += 1;
 
-    const finish = (created: number, note: string) => {
+    const finish = (created: number, note: string, code: IngestCode) => {
       this.state.lastIngestCreated = created;
       this.state.lastIngestNote = note;
-      return { created, note };
+      this.state.lastIngestCode = code;
+      return { created, note, code };
     };
 
     if (!signal.isQualified) {
-      return finish(0, 'سیگنال واجد شرایط نبود.');
+      return finish(0, 'سیگنال واجد شرایط نبود.', 'NOT_QUALIFIED');
     }
     if (!signal.entryPrice || !signal.stopLoss || !signal.takeProfit1 || !signal.takeProfit2) {
-      return finish(0, 'نقطه ورود / حد ضرر / حد سود در سیگنال کامل نیست.');
+      return finish(0, 'نقطه ورود / حد ضرر / حد سود در سیگنال کامل نیست.', 'INCOMPLETE_LEVELS');
     }
 
     try {
       const prices = await fetchPrices([signal.symbol]);
       const price = prices[signal.symbol];
       if (!price) {
-        return finish(0, 'قیمت لحظه‌ای نماد در دسترس نبود.');
+        return finish(0, 'قیمت لحظه‌ای نماد در دسترس نبود.', 'NO_PRICE');
       }
 
       const userIds = await this.resolveUserIds();
       if (userIds.length === 0) {
-        return finish(0, 'کاربری برای حساب معاملاتی وجود ندارد.');
+        return finish(0, 'کاربری برای حساب معاملاتی وجود ندارد.', 'NO_USERS');
       }
 
       const side: 'LONG' | 'SHORT' =
@@ -277,7 +290,8 @@ class TradeEngine {
       if (ENTRIES_MODE === 'pullback' && !isPullbackEntry(side, signal.entryPrice, price)) {
         return finish(
           0,
-          `ورود شکست (Breakout) رد شد — فقط ورود پولبک پذیرفته می‌شود (${signal.symbol}).`
+          `ورود شکست (Breakout) رد شد — فقط ورود پولبک پذیرفته می‌شود (${signal.symbol}).`,
+          'BREAKOUT_REJECTED'
         );
       }
 
@@ -352,11 +366,11 @@ class TradeEngine {
           ? `سفارش ${side === 'LONG' ? 'خرید' : 'فروش'} برای ${signal.symbol} ساخته شد و به نقطه ورود ${signal.entryPrice} وصل شد.`
           : 'سفارشی ساخته نشد (نماد از قبل پوزیشن فعال دارد یا مارجین آزاد کافی نیست).';
       console.log(`[trade] ingested signal ${signal.symbol} ${side} -> created ${created}`);
-      return finish(created, note);
+      return finish(created, note, created > 0 ? 'CREATED' : 'SYMBOL_ACTIVE_OR_NO_MARGIN');
     } catch (err: any) {
       const msg = err?.message || 'خطای غیرمنتظره در دریافت سیگنال';
       this.state.lastError = msg;
-      return finish(0, msg);
+      return finish(0, msg, 'ERROR');
     }
   }
 
