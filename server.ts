@@ -496,6 +496,13 @@ async function startServer() {
     try {
       const { mongoUri } = req.body as { mongoUri?: string };
       const conn = await dbRepo.connectMongo(mongoUri || '');
+      // let the driver settle so the status we hand back reflects the new state
+      if (conn.connected && conn.mode === 'mongodb_remote') {
+        for (let i = 0; i < 10; i += 1) {
+          if (dbRepo.isRemoteReady()) break;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+      }
       const status = await dbRepo.getDatabaseStatus();
       res.json({
         ok: conn.connected,
