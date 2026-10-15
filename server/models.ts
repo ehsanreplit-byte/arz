@@ -608,20 +608,39 @@ class DatabaseEngine {
     }
   }
 
+  /** Splits a Mongo connection string into host + database name. */
+  private parseMongoUri(uri: string): { host: string; dbName: string } {
+    try {
+      const m = /^mongodb(?:\+srv)?:\/\/(?:[^@/]+@)?([^/?]+)(?:\/([^?]*))?/.exec(uri || '');
+      const dbName = (m?.[2] || '').trim();
+      return { host: m?.[1] || '', dbName: dbName || 'test' };
+    } catch {
+      return { host: '', dbName: '' };
+    }
+  }
+
   public async getDatabaseStatus() {
     const users = await this.getAllUsers();
     const symbols = await this.getSymbols();
     const messages = await this.getTelegramMessages();
     const tgConfig = await this.getTelegramConfig();
+    const signals = await this.getRegisteredSignals();
+
+    const remoteReady = this.isMongoConnected && mongoose.connection.readyState === 1;
+    const { host, dbName } = this.parseMongoUri(this.activeUri);
+    const configured = this.parseMongoUri(this.store.mongoUri || process.env.MONGODB_URI || '');
 
     return {
-      isRemoteConnected: this.isMongoConnected && mongoose.connection.readyState === 1,
+      isRemoteConnected: remoteReady,
       readyState: mongoose.connection.readyState,
-      engineLabel:
-        this.isMongoConnected && mongoose.connection.readyState === 1
-          ? 'متصل به سرور MongoDB (Mongoose ODM)'
-          : 'موتور دیتابیس دائمی MongoDB (ذخیره‌سازی دیسک + Mongoose Schema)',
-      activeUri: this.isMongoConnected ? this.maskMongoUri(this.activeUri) : 'mongodb://127.0.0.1:27017/crypto_telegram_admin (Persistent Store)',
+      statusLabel: remoteReady ? 'اتصال برقرار است' : 'اتصال برقرار نیست',
+      engineLabel: remoteReady
+        ? 'متصل به سرور MongoDB Atlas (Mongoose ODM)'
+        : 'موتور دیتابیس داخلی (ذخیره‌سازی دیسک موقت — با هر دیپلوی پاک می‌شود)',
+      clusterHost: remoteReady ? host : configured.host || '—',
+      databaseName: remoteReady ? dbName : configured.dbName || '—',
+      hasConfiguredUri: Boolean((this.store.mongoUri || process.env.MONGODB_URI || '').trim()),
+      activeUri: this.isMongoConnected ? this.maskMongoUri(this.activeUri) : '—',
       configuredExternalUri: this.maskMongoUri(this.store.mongoUri),
       lastError: this.lastConnectionError,
       collections: {
@@ -629,6 +648,7 @@ class DatabaseEngine {
         symbols: symbols.length,
         telegramMessages: messages.length,
         telegramBotConfigured: Boolean(tgConfig?.botToken),
+        registeredSignals: signals.length,
       },
     };
   }
