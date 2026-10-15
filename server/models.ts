@@ -109,6 +109,8 @@ export interface IRegisteredSignal {
   dispatchedToTrade?: boolean;
   /** outcome of the trade hand-off (Persian message) */
   tradeDispatchNote?: string;
+  /** CREATED | BREAKOUT_REJECTED | SYMBOL_ACTIVE_OR_NO_MARGIN | ... */
+  tradeStatus?: string;
   tradeDispatchedAt?: string;
 }
 
@@ -307,6 +309,7 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   createdAt: { type: String, default: () => new Date().toISOString() },
   dispatchedToTrade: { type: Boolean, default: false },
   tradeDispatchNote: { type: String, default: '' },
+  tradeStatus: { type: String, default: '' },
   tradeDispatchedAt: { type: String, default: '' },
 });
 
@@ -1036,7 +1039,8 @@ class DatabaseEngine {
   public async markSignalDispatched(
     id: string,
     dispatched: boolean,
-    note: string
+    note: string,
+    status = ''
   ): Promise<void> {
     const at = new Date().toISOString();
     if (
@@ -1047,6 +1051,7 @@ class DatabaseEngine {
       await RegisteredSignalModel.findByIdAndUpdate(id, {
         dispatchedToTrade: dispatched,
         tradeDispatchNote: note,
+        tradeStatus: status,
         tradeDispatchedAt: at,
       });
     }
@@ -1055,6 +1060,7 @@ class DatabaseEngine {
     if (target) {
       target.dispatchedToTrade = dispatched;
       target.tradeDispatchNote = note;
+      target.tradeStatus = status;
       target.tradeDispatchedAt = at;
       this.saveDiskStore();
     }
