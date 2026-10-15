@@ -336,12 +336,11 @@ export function AccountPanel() {
             درگیر نیست.
           </li>
           <li>
-            هر سیگنال <span className="font-bold text-blue-600">واجد شرایط</span> (حداقل ۲ سیگنال
+            هر سیگنال <span className="font-bold text-blue-600">واجد شرایط</span> (حداقل ۳ سیگنال
             خرید یا فروش) یک سفارش در انتظار ورود می‌سازد.
           </li>
           <li>
-            سفارش فقط زمانی باز می‌شود که قیمت بازار به <span className="font-bold">نقطهٔ ورود</span>{' '}
-            سیگنال برسد — درست مثل صرافی واقعی.
+            فقط ورودهای <span className="font-bold text-blue-600">پولبک</span> پذیرفته می‌شوند (خرید در افت قیمت، فروش در رشد قیمت). سفارش فقط زمانی باز می‌شود که قیمت بازار به <span className="font-bold">نقطهٔ ورود</span> سیگنال برسد — درست مثل صرافی واقعی.
           </li>
           <li>
             حد ضرر و حد سودها <span className="font-bold">عیناً از خود سیگنال</span> گرفته می‌شوند.
