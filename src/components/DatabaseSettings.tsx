@@ -36,21 +36,26 @@ export function DatabaseSettings() {
     }
   };
 
-  const fetchStatus = async () => {
-    setLoading(true);
+  const fetchStatus = async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await apiClient.getDatabaseStatus();
       setStatus(res.status);
       setUsers(res.users);
     } catch (err: any) {
-      setFeedback({ type: 'error', text: err?.message || 'خطا در دریافت وضعیت دیتابیس' });
+      if (!silent) {
+        setFeedback({ type: 'error', text: err?.message || 'خطا در دریافت وضعیت دیتابیس' });
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void fetchStatus();
+    // live status: refresh quietly so the indicator always matches reality
+    const t = window.setInterval(() => void fetchStatus(true), 15000);
+    return () => window.clearInterval(t);
   }, []);
 
   const handleConnectMongo = async (e: React.FormEvent) => {
@@ -97,7 +102,7 @@ export function DatabaseSettings() {
 
         <button
           type="button"
-          onClick={fetchStatus}
+          onClick={() => void fetchStatus()}
           disabled={loading}
           className="px-3.5 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap self-start sm:self-auto cursor-pointer"
         >
@@ -106,17 +111,77 @@ export function DatabaseSettings() {
         </button>
       </div>
 
+      {/* Live connection banner */}
+      {status && (
+        <div
+          className={`rounded-xl border p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+            status.isRemoteConnected
+              ? 'bg-emerald-50 border-emerald-200'
+              : 'bg-amber-50 border-amber-200'
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            {status.isRemoteConnected ? (
+              <span className="relative flex h-3 w-3 mt-1.5 shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500" />
+              </span>
+            ) : (
+              <AlertCircle className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
+            )}
+            <div className="space-y-1">
+              <div
+                className={`text-base font-extrabold ${
+                  status.isRemoteConnected ? 'text-emerald-700' : 'text-amber-700'
+                }`}
+              >
+                {status.statusLabel}
+              </div>
+              <div
+                className={`text-xs ${
+                  status.isRemoteConnected ? 'text-emerald-700' : 'text-amber-700'
+                }`}
+              >
+                {status.engineLabel}
+              </div>
+              {status.isRemoteConnected ? (
+                <div
+                  className="text-[11px] text-emerald-800 font-mono-tabular pt-1 break-all"
+                  dir="ltr"
+                >
+                  {status.clusterHost} / {status.databaseName}
+                </div>
+              ) : (
+                <div className="text-[11px] text-amber-800 pt-1">
+                  {status.lastError
+                    ? `آخرین خطا: ${status.lastError}`
+                    : status.hasConfiguredUri
+                    ? 'رشتهٔ اتصال ثبت شده ولی هنوز برقرار نشده است.'
+                    : 'هنوز رشتهٔ اتصال MongoDB وارد نشده است.'}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => void fetchStatus()}
+            disabled={loading}
+            className={`px-3.5 py-2 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap self-start sm:self-auto cursor-pointer ${
+              status.isRemoteConnected
+                ? 'bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-50'
+                : 'bg-white border border-amber-300 text-amber-700 hover:bg-amber-50'
+            }`}
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span>تست اتصال</span>
+          </button>
+        </div>
+      )}
+
       {/* Collection Counts Grid */}
       {status && (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1">
-            <div className="text-xs text-slate-500">وضعیت موتور دیتابیس</div>
-            <div className="text-sm font-bold text-emerald-600 flex items-center gap-1.5 pt-1">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span>فعال و آماده به کار</span>
-            </div>
-            <div className="text-[11px] text-slate-400 pt-1">{status.engineLabel}</div>
-          </div>
 
           <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1">
             <div className="text-xs text-slate-500">کالکشن مدیران (AdminUser)</div>
