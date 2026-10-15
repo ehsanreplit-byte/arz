@@ -3,7 +3,10 @@
  * ---------------------------------------------------------------------------
  * Direct link with the Signals engine:
  *
- *  1. The moment the Signals engine registers a QUALIFIED signal (>= 2 Al
+ *  0. Entry-quality filter: only PULLBACK entries are accepted (buy a dip /
+ *     sell a rally). Breakout entries are rejected, because on live data they
+ *     won only 1 of 13 trades. Toggle with TRADE_ENTRIES_MODE=all|pullback.
+ *  1. The moment the Signals engine registers a QUALIFIED signal (>= 3 Al
  *     Brooks signals on one side), it hands that signal to `ingestSignal()`
  *     here. A PENDING order is created immediately — no waiting for a poll.
  *  2. The PENDING order waits until the market price actually REACHES the
@@ -29,6 +32,24 @@ const SIGNAL_MAX_AGE_MS = Math.max(
   Number(process.env.TRADE_SIGNAL_MAX_AGE_MS || 35 * 60 * 1000)
 );
 const MIN_MARGIN_USD = Number(process.env.TRADE_MIN_MARGIN_USD || 1);
+/**
+ * Which entries are allowed.
+ *  - 'pullback' (default): only take entries that require the price to come
+ *    BACK to the signal level (buy a dip / sell a rally). Breakout entries are
+ *    rejected. Measured on live data, breakout entries won only 1 of 13.
+ *  - 'all': accept every entry (old behaviour).
+ */
+const ENTRIES_MODE = (process.env.TRADE_ENTRIES_MODE || 'pullback').trim().toLowerCase();
+
+/**
+ * A pullback entry means the market must travel back to the signal entry:
+ *  - LONG  : entry sits BELOW the current price (price falls to it)
+ *  - SHORT : entry sits ABOVE the current price (price rises to it)
+ * A breakout entry is the opposite and is skipped when ENTRIES_MODE='pullback'.
+ */
+function isPullbackEntry(side: 'LONG' | 'SHORT', entry: number, price: number): boolean {
+  return side === 'LONG' ? entry <= price : entry >= price;
+}
 /** Tolerance around the entry level (percent) so an entry sitting exactly on
  *  the market price still fills instead of waiting for a fresh touch. */
 const ENTRY_TOLERANCE_PCT =
@@ -251,6 +272,15 @@ class TradeEngine {
 
       const side: 'LONG' | 'SHORT' =
         signal.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG';
+
+      // ---- entry-quality filter: pullbacks only ----
+      if (ENTRIES_MODE === 'pullback' && !isPullbackEntry(side, signal.entryPrice, price)) {
+        return finish(
+          0,
+          `ورود شکست (Breakout) رد شد — فقط ورود پولبک پذیرفته می‌شود (${signal.symbol}).`
+        );
+      }
+
       const triggerAbove = signal.entryPrice > price;
       let created = 0;
 
@@ -382,6 +412,15 @@ class TradeEngine {
           const price = prices[sig.symbol];
           if (!price) continue;
 
+          const side: 'LONG' | 'SHORT' =
+            sig.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG';
+
+          // same entry-quality filter as the direct hand-off
+          if (ENTRIES_MODE === 'pullback' && !isPullbackEntry(side, sig.entryPrice, price)) {
+            seenSignalIds.add(sig._id);
+            continue;
+          }
+
           const margin = Math.min(
             (account.balance * (account.marginPerTradePct || 20)) / 100,
             freeMargin
@@ -397,7 +436,7 @@ class TradeEngine {
             signalId: sig._id,
             symbol: sig.symbol,
             label: sig.label || sig.symbol,
-            side: sig.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG',
+            side,
             leverage,
             status: 'PENDING',
             triggerAbove: sig.entryPrice > price,
