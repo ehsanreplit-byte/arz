@@ -264,7 +264,7 @@ export function SignalsPanel() {
               </span>{' '}
               ارسال می‌شود. نتیجهٔ هر ۶ سیگنال برای <span className="font-bold text-slate-900">تمام ارزهای اضافه‌شده</span> در جدول زیر
               ثبت می‌شود و ارزهایی که حداقل{' '}
-              <span className="font-bold text-blue-600">{status?.minConsensus || 2}</span> سیگنال خرید
+              <span className="font-bold text-blue-600">{status?.minConsensus || 3}</span> سیگنال خرید
               یا فروش صادر کنند با برچسب «واجد شرایط» مشخص می‌شوند.
             </p>
           </div>
@@ -406,7 +406,7 @@ export function SignalsPanel() {
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
           <div className="text-xs text-slate-500">
-            واجد شرایط (حداقل {status?.minConsensus || 2} سیگنال)
+            واجد شرایط (حداقل {status?.minConsensus || 3} سیگنال)
           </div>
           <div className="text-2xl font-extrabold text-blue-600 font-mono-tabular">
             {qualifiedCount}
