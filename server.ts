@@ -2153,8 +2153,36 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
   // ==========================================================================
   // 5D. Virtual Demo Account (حساب کاربری) & Trade Engine (ترید)
   // ==========================================================================
-  const requireUser = (req: AuthenticatedRequest): string =>
-    String(req.user?.id || req.user?.email || 'global');
+  /**
+   * Resolves the caller's trading-account key.
+   *
+   * The JWT is stateless: it keeps working after a redeploy wipes the on-disk
+   * mirror, but the user row is re-created with a NEW `_id`. The token's old
+   * `id` then matches no user, so the engines created orders under the new id
+   * while the panel asked for the stale one — orders existed but the list was
+   * empty. The EMAIL never changes, so resolving by email keeps the engine and
+   * the API on the same key.
+   */
+  const requireUser = async (req: AuthenticatedRequest): Promise<string> => {
+    const tokenId = String(req.user?.id || '');
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    if (email) {
+      try {
+        const u = await dbRepo.findUserByEmail(email);
+        if (u?._id) {
+          const currentId = String(u._id);
+          // the token still carries an older id -> adopt anything stored under it
+          if (tokenId && tokenId !== currentId) {
+            await dbRepo.reassignUserKey(tokenId, currentId);
+          }
+          return currentId;
+        }
+      } catch {
+        /* fall through to the token id */
+      }
+    }
+    return String(tokenId || email || 'global');
+  };
 
   async function buildAccountSnapshot(userId: string) {
     const account = await dbRepo.getOrCreateTradeAccount(userId);
@@ -2203,7 +2231,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.get('/api/account', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      res.json(await buildAccountSnapshot(requireUser(req)));
+      res.json(await buildAccountSnapshot(await requireUser(req)));
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در خواندن حساب کاربری' });
     }
@@ -2220,8 +2248,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       if (marginPerTradePct !== undefined) {
         patch.marginPerTradePct = Math.min(100, Math.max(1, Number(marginPerTradePct)));
       }
-      await dbRepo.updateTradeAccount(requireUser(req), patch);
-      res.json(await buildAccountSnapshot(requireUser(req)));
+      await dbRepo.updateTradeAccount(await requireUser(req), patch);
+      res.json(await buildAccountSnapshot(await requireUser(req)));
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در ذخیره تنظیمات حساب' });
     }
@@ -2229,7 +2257,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.post('/api/account/reset', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       await dbRepo.resetTradeAccount(userId);
       res.json(await buildAccountSnapshot(userId));
     } catch (err: any) {
@@ -2239,7 +2267,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.get('/api/trade/positions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       // Make sure the engine knows about this user key even if they never opened
       // the account page, so future orders are always created for them.
       await dbRepo.getOrCreateTradeAccount(userId);
@@ -2320,7 +2348,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.get('/api/reports/txt', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       const account = await dbRepo.getOrCreateTradeAccount(userId);
       const signals = await dbRepo.getRegisteredSignals();
       const positions = await dbRepo.getPositions(userId);
@@ -2610,7 +2638,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.post('/api/trade/positions/:id/close', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       const positions = await dbRepo.getPositions(userId);
       const pos = positions.find((p) => p._id === String(req.params.id));
       if (!pos) {
@@ -2679,7 +2707,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.delete('/api/trade/positions/:id', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       const ok = await dbRepo.deletePosition(String(req.params.id));
       res.json({ ok, positions: await dbRepo.getPositions(userId) });
     } catch (err: any) {
@@ -2689,7 +2717,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
 
   app.delete('/api/trade/positions', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const userId = requireUser(req);
+      const userId = await requireUser(req);
       await dbRepo.clearPositions(userId);
       res.json({ ok: true, positions: [] });
     } catch (err: any) {
