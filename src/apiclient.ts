@@ -51,7 +51,12 @@ export interface TelegramChatMessage {
 export interface DatabaseStatusInfo {
   isRemoteConnected: boolean;
   readyState: number;
+  /** «اتصال برقرار است» / «اتصال برقرار نیست» */
+  statusLabel: string;
   engineLabel: string;
+  clusterHost: string;
+  databaseName: string;
+  hasConfiguredUri: boolean;
   activeUri: string;
   configuredExternalUri: string;
   lastError: string;
@@ -60,6 +65,7 @@ export interface DatabaseStatusInfo {
     symbols: number;
     telegramMessages: number;
     telegramBotConfigured: boolean;
+    registeredSignals?: number;
   };
 }
 
