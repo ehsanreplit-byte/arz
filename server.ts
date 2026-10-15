@@ -2343,6 +2343,18 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
   const num = (v: any, digits = 8): string =>
     typeof v === 'number' && Number.isFinite(v) ? v.toFixed(digits) : '—';
 
+  const tradeStatusFa = (code?: string): string =>
+    ({
+      CREATED: '✅ سفارش ساخته شد',
+      BREAKOUT_REJECTED: '⛔ ورود شکست — رد شد (فقط پولبک پذیرفته می‌شود)',
+      SYMBOL_ACTIVE_OR_NO_MARGIN: '⏸ نماد پوزیشن فعال دارد یا مارجین آزاد کافی نیست',
+      NOT_QUALIFIED: '— سیگنال واجد شرایط نبود',
+      INCOMPLETE_LEVELS: '⚠ سطوح ورود/حد ضرر/حد سود ناقص',
+      NO_PRICE: '⚠ قیمت لحظه‌ای در دسترس نبود',
+      NO_USERS: '⚠ کاربری برای حساب معاملاتی نیست',
+      ERROR: '✖ خطا در ارسال به موتور ترید',
+    } as Record<string, string>)[code || ''] || '—';
+
   const sideFa = (s: string): string =>
     s === 'LONG' ? 'LONG (خرید)' : s === 'SHORT' ? 'SHORT (فروش)' : 'NO TRADE (بدون معامله)';
 
@@ -2380,6 +2392,22 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       kv('اهرم پیش‌فرض', `${account.leverage}x`);
       line();
 
+      // ---- identity diagnostics: the #1 reason orders look "missing" ----
+      const diag = await dbRepo.getPositionsDiagnostics(userId);
+      const engineState = tradeEngine.getState();
+      line('تشخیص هویت و ذخیره‌سازی');
+      rule('-');
+      kv('کلید کاربری گزارش', userId);
+      kv('MongoDB متصل', diag.remoteReady ? 'بله' : 'خیر');
+      kv('پوزیشن‌ها در MongoDB', `${diag.remoteTotal} (مال شما: ${diag.remoteMine})`);
+      kv('پوزیشن‌ها روی دیسک', `${diag.diskTotal} (مال شما: ${diag.diskMine})`);
+      kv('کلیدهای مالک پوزیشن‌ها', diag.ownerKeys.join(' , ') || 'هیچ');
+      kv('کاربران شناخته‌شده موتور', (engineState.knownUserIds || []).join(' , ') || 'هیچ');
+      kv('مجموع سیگنال دریافتی موتور', engineState.signalsIngestedTotal);
+      kv('آخرین کد ارسال', engineState.lastIngestCode || '—');
+      kv('آخرین پیام ارسال', engineState.lastIngestNote || '—');
+      line();
+
       const fmtSignal = (s: any, i: number) => {
         rule('=');
         line(`سیگنال شماره ${String(i + 1).padStart(3, '0')}`);
@@ -2406,7 +2434,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         kv('نظر ChatGPT', sideFa(s.chatGptDirection || 'NO TRADE'));
         kv('ستاپ ChatGPT', s.chatGptSetupName || '—');
         kv('شماره چرخه', s.cycleNumber ?? '—');
-        kv('ارسال به موتور ترید', s.dispatchedToTrade ? 'بله' : 'خیر');
+        kv('سفارش ساخته شد؟', s.dispatchedToTrade ? 'بله' : 'خیر');
+        kv('وضعیت ارسال به ترید', tradeStatusFa(s.tradeStatus));
         kv('زمان ارسال به ترید (ISO)', s.tradeDispatchedAt || '—');
         kv('زمان ارسال به ترید (ایران)', faTime(s.tradeDispatchedAt));
         kv('پیام ارسال به ترید', s.tradeDispatchNote || '—');
@@ -2494,7 +2523,16 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       line('بخش ۳ — خلاصه آماری');
       rule('=');
       kv('سیگنال‌های واجد شرایط', signals.filter((s) => s.isQualified).length);
-      kv('سیگنال‌های ارسال‌شده به ترید', signals.filter((s) => s.dispatchedToTrade).length);
+      kv('سیگنال‌های تبدیل‌شده به سفارش', signals.filter((s) => s.dispatchedToTrade).length);
+      line('  دلیل ساخته‌نشدن بقیه سیگنال‌ها:');
+      const reasons = new Map<string, number>();
+      for (const s of signals) {
+        if (s.dispatchedToTrade) continue;
+        const key = tradeStatusFa((s as any).tradeStatus);
+        reasons.set(key, (reasons.get(key) || 0) + 1);
+      }
+      if (reasons.size === 0) line('    (همهٔ سیگنال‌ها سفارش ساختند)');
+      for (const [k, v] of reasons) line(`    ${v} ×  ${k}`);
       kv('سفارش در انتظار', pending.length);
       kv('پوزیشن باز', open.length);
       kv('معاملات بسته‌شده', closed.length);
