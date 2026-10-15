@@ -640,6 +640,7 @@ export interface RegisteredSignalInfo {
   cycleNumber: number;
   createdAt: string;
   dispatchedToTrade?: boolean;
+  tradeStatus?: string;
   tradeDispatchNote?: string;
   tradeDispatchedAt?: string;
 }
@@ -655,6 +656,7 @@ export interface SignalCycleSymbolResult {
   qualified: boolean;
   recorded: boolean;
   dispatchedToTrade?: boolean;
+  tradeStatus?: string;
   tradeNote?: string;
   chatGptStatus: string;
   aiEngineUsed: string;
