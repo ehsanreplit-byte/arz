@@ -349,6 +349,8 @@ function generateObjectId(): string {
 class DatabaseEngine {
   private store: PersistentStoreData;
   private isMongoConnected = false;
+  /** stale-id -> current-id pairs already migrated in this process */
+  private rekeyAttempted = new Set<string>();
   private lastConnectionError = '';
   private activeUri = '';
 
@@ -1052,6 +1054,64 @@ class DatabaseEngine {
   /** True when the remote MongoDB store is actually usable right now. */
   public isRemoteReady(): boolean {
     return this.isMongoConnected && mongoose.connection.readyState === 1;
+  }
+
+  /**
+   * One-time self-heal: moves trading data from a stale user key (an old token
+   * id whose user row was re-created with a new `_id`) onto the current key.
+   * Returns how many positions were re-keyed.
+   */
+  public async reassignUserKey(fromKey: string, toKey: string): Promise<number> {
+    if (!fromKey || !toKey || fromKey === toKey) return 0;
+    // a stale token keeps sending its old id forever; only heal once per pair
+    const pair = `${fromKey}->${toKey}`;
+    if (this.rekeyAttempted.has(pair)) return 0;
+    this.rekeyAttempted.add(pair);
+    let moved = 0;
+
+    if (this.isRemoteReady()) {
+      try {
+        const r = await PositionModel.updateMany(
+          { userId: fromKey },
+          { $set: { userId: toKey } }
+        );
+        moved += (r as any)?.modifiedCount || 0;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (Array.isArray(this.store.positions)) {
+      for (const p of this.store.positions) {
+        if (p.userId === fromKey) {
+          p.userId = toKey;
+          moved += 1;
+        }
+      }
+    }
+
+    // move the trading account over only when the target has none yet
+    const targetAccount = await this.getTradeAccount(toKey);
+    if (!targetAccount) {
+      const staleAccount = await this.getTradeAccount(fromKey);
+      if (staleAccount) {
+        if (this.isRemoteReady()) {
+          try {
+            await TradeAccountModel.updateOne(
+              { _id: staleAccount._id },
+              { $set: { userId: toKey } }
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+        const diskAccount = (this.store.tradeAccounts || []).find((a) => a.userId === fromKey);
+        if (diskAccount) diskAccount.userId = toKey;
+      }
+    }
+
+    this.saveDiskStore();
+    return moved;
   }
 
   /**
