@@ -48,6 +48,8 @@ export interface SignalCycleSymbolResult {
   recorded: boolean;
   /** true when the signal was handed over to the trade engine right away */
   dispatchedToTrade?: boolean;
+  /** machine-readable outcome of the trade hand-off */
+  tradeStatus?: string;
   tradeNote?: string;
   chatGptStatus: string;
   aiEngineUsed: string;
@@ -483,6 +485,7 @@ class SignalEngine {
           qualified: false,
           recorded: false,
           dispatchedToTrade: false,
+          tradeStatus: '',
           tradeNote: '',
           chatGptStatus: 'در انتظار',
           aiEngineUsed: '—',
@@ -587,9 +590,12 @@ class SignalEngine {
             try {
               const { tradeEngine } = await import('./tradeEngine.js');
               const ingest = await tradeEngine.ingestSignal(savedSignal);
-              result.dispatchedToTrade = true;
+              // "sent to trade" must mean an order really exists — a rejected
+              // breakout is NOT a hand-off.
+              result.dispatchedToTrade = ingest.created > 0;
+              result.tradeStatus = ingest.code;
               result.tradeNote = ingest.note;
-              dispatched += 1;
+              if (ingest.created > 0) dispatched += 1;
             } catch (linkErr: any) {
               result.dispatchedToTrade = false;
               result.tradeNote = linkErr?.message || 'ارسال سیگنال به موتور ترید ناموفق بود.';
@@ -602,7 +608,8 @@ class SignalEngine {
               await dbRepo.markSignalDispatched(
                 savedSignal._id,
                 Boolean(result.dispatchedToTrade),
-                result.tradeNote || ''
+                result.tradeNote || '',
+                result.tradeStatus || ''
               );
             } catch {
               // non fatal
