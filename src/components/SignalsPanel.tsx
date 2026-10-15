@@ -582,8 +582,15 @@ export function SignalsPanel() {
                                   به ترید ارسال شد
                                 </span>
                               ) : (
-                                <span className="text-[10px] text-slate-400 whitespace-nowrap">
-                                  ارسال به ترید ثبت نشده
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap max-w-[220px] truncate"
+                                  title={sig.tradeDispatchNote || ''}
+                                >
+                                  {sig.tradeStatus === 'BREAKOUT_REJECTED'
+                                    ? 'رد شد: ورود شکست (فقط پولبک)'
+                                    : sig.tradeStatus === 'SYMBOL_ACTIVE_OR_NO_MARGIN'
+                                    ? 'نماد فعال دارد / مارجین کم'
+                                    : sig.tradeDispatchNote || 'سفارش ساخته نشد'}
                                 </span>
                               )}
                             </div>
