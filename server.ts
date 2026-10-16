@@ -2420,7 +2420,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         kv('جهت توافق', sideFa(s.consensusDirection));
         kv('واجد شرایط', s.isQualified ? 'بله' : 'خیر');
         kv('سیگنال خرید / فروش', `${s.buySignalsCount} / ${s.sellSignalsCount}`);
-        kv('تعداد بررسی‌شده', `${s.totalSignalsChecked} از ۶ روش`);
+        kv('تعداد رأی‌ها', `${s.totalSignalsChecked} رأی (۵ روش مستقل + نظر ChatGPT)`);
+        kv('رأی ChatGPT شمرده شد؟', (s as any).aiVoteCounted ? 'بله ✅' : 'خیر (پاسخ هوش مصنوعی نبود)');
         kv('تعداد سیگنال هم‌جهت', s.matchedSignalsCount);
         kv('قیمت لحظه‌ای هنگام تحلیل', num(s.currentPrice));
         kv('نقطه ورود', num(s.entryPrice));
