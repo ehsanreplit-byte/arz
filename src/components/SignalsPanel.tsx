@@ -737,6 +737,22 @@ export function SignalsPanel() {
 
                             <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1.5">
                               <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                                <Activity className="w-3.5 h-3.5 text-slate-500" />
+                                سیگنال تک‌روش ال بروکس (رأی مستقل)
+                              </div>
+                              <div className="text-[11px] text-slate-500">
+                                جهت:{' '}
+                                {!sig.singleMethodDirection ||
+                                sig.singleMethodDirection === 'NO TRADE'
+                                  ? 'بدون رأی'
+                                  : sig.singleMethodDirection === 'LONG'
+                                  ? 'خرید (LONG)'
+                                  : 'فروش (SHORT)'}
+                              </div>
+                            </div>
+
+                            <div className="rounded-lg border border-slate-200 bg-white p-3 space-y-1.5">
+                              <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
                                 <Sparkles className="w-3.5 h-3.5 text-blue-600" />
                                 نظر ChatGPT — {sig.chatGptSetupName || 'بدون ستاپ'}
                               </div>
