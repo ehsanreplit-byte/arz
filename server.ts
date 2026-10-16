@@ -906,6 +906,8 @@ async function startServer() {
         (c, idx) => c.close >= ema20List[n - 20 + idx]
       ).length;
 
+      // NOTE: this baseline read is mirrored by server/alBrooksSingle.ts, which
+      // the signals engine uses as an independent vote. Keep the two in sync.
       const isAlwaysInLong =
         lastCandle.close >= emaNow || (closesAboveEma >= 11 && emaNow >= ema10Ago);
       const direction: 'LONG' | 'SHORT' = isAlwaysInLong ? 'LONG' : 'SHORT';
@@ -2420,7 +2422,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         kv('جهت توافق', sideFa(s.consensusDirection));
         kv('واجد شرایط', s.isQualified ? 'بله' : 'خیر');
         kv('سیگنال خرید / فروش', `${s.buySignalsCount} / ${s.sellSignalsCount}`);
-        kv('تعداد رأی‌ها', `${s.totalSignalsChecked} رأی (۵ روش مستقل + نظر ChatGPT)`);
+        kv('تعداد رأی‌ها', `${s.totalSignalsChecked} رأی (۵ روش + سیگنال تک‌روش + نظر ChatGPT)`);
+        kv('رأی سیگنال تک‌روش', (s as any).singleMethodDirection || '—');
         kv('رأی ChatGPT شمرده شد؟', (s as any).aiVoteCounted ? 'بله ✅' : 'خیر (پاسخ هوش مصنوعی نبود)');
         kv('تعداد سیگنال هم‌جهت', s.matchedSignalsCount);
         kv('قیمت لحظه‌ای هنگام تحلیل', num(s.currentPrice));
