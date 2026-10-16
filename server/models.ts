@@ -107,6 +107,8 @@ export interface IRegisteredSignal {
   aiEngineUsed: string;
   /** true when a real ChatGPT verdict counted as a vote */
   aiVoteCounted?: boolean;
+  /** direction voted by the independent single-method Al Brooks signal */
+  singleMethodDirection?: string;
   cycleNumber: number;
   createdAt: string;
   /** true when this qualified signal was pushed straight to the trade engine */
@@ -310,6 +312,7 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   chatGptReasoning: { type: String, default: '' },
   aiEngineUsed: { type: String, default: '' },
   aiVoteCounted: { type: Boolean, default: false },
+  singleMethodDirection: { type: String, default: '' },
   cycleNumber: { type: Number, default: 1 },
   createdAt: { type: String, default: () => new Date().toISOString() },
   dispatchedToTrade: { type: Boolean, default: false },
