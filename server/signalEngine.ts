@@ -11,6 +11,7 @@
  *    all 6 signals is registered as a consensus (qualified) signal.
  */
 
+import { computeSingleMethodSignal } from './alBrooksSingle.js';
 import { dbRepo, IRegisteredSignal, ISignalMethodItem } from './models.js';
 import {
   analyzeAllFiveAlBrooksMethods,
@@ -55,6 +56,8 @@ export interface SignalCycleSymbolResult {
   aiEngineUsed: string;
   /** true when the ChatGPT verdict was a real AI answer and counted as a vote */
   aiVoteCounted?: boolean;
+  /** direction voted by the independent single-method Al Brooks signal */
+  singleMethodDirection?: 'LONG' | 'SHORT' | 'NO TRADE';
   error?: string;
 }
 
@@ -545,8 +548,17 @@ class SignalEngine {
           const aiVote: 'LONG' | 'SHORT' | 'NO TRADE' =
             aiIsReal && verdict.direction !== 'NO TRADE' ? verdict.direction : 'NO TRADE';
 
+          // The single-method Al Brooks signal (the one drawn on the chart) is a
+          // genuinely independent seventh voter: it reads the EMA 20 alone
+          // instead of the five-method breakdown.
+          const singleMethod = computeSingleMethodSignal(candles as any);
+          const singleVote: 'LONG' | 'SHORT' | 'NO TRADE' = singleMethod
+            ? singleMethod.direction
+            : 'NO TRADE';
+
           const votes: Array<'LONG' | 'SHORT' | 'NO TRADE'> = [
             ...votingMethods.map((s) => s.direction),
+            singleVote,
             aiVote,
           ];
           const buySignalsCount = votes.filter((d) => d === 'LONG').length;
@@ -570,6 +582,7 @@ class SignalEngine {
           result.chatGptStatus = verdict.status;
           result.aiEngineUsed = verdict.engineUsed;
           result.aiVoteCounted = aiIsReal && aiVote !== 'NO TRADE';
+          result.singleMethodDirection = singleVote;
 
           // Record EVERY evaluated watchlist symbol (qualified or not) so the
           // table shows the live price and signal status of all added coins.
@@ -604,6 +617,7 @@ class SignalEngine {
             chatGptReasoning: verdict.reasoning,
             aiEngineUsed: verdict.engineUsed,
             aiVoteCounted: aiIsReal && aiVote !== 'NO TRADE',
+            singleMethodDirection: singleVote,
             cycleNumber,
           };
 
