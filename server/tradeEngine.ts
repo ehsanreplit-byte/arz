@@ -390,11 +390,21 @@ class TradeEngine {
         accounts.push(await dbRepo.getOrCreateTradeAccount(uid));
       }
 
-      // 2. recent qualified signals (safety net if the direct hand-off failed)
+      // 2. recent qualified signals — a SAFETY NET only.
+      //
+      // A signal that already went through the direct hand-off carries a
+      // `tradeStatus`. It MUST be skipped here: the pullback/breakout decision
+      // has to be made once, against the price at signal time. Re-testing it on
+      // a later tick re-classifies it against the NEW price, so a breakout that
+      // was correctly rejected could come back minutes later as a "pullback"
+      // and open a position that was never wanted.
       const allSignals = await dbRepo.getRegisteredSignals();
       const now = Date.now();
       const qualifiedSignals = allSignals.filter((s) => {
         if (!s.isQualified) return false;
+        // already decided by the direct hand-off (tradeDispatchedAt covers rows
+        // written before tradeStatus existed)
+        if (s.tradeStatus || s.tradeDispatchedAt) return false;
         if (!s.entryPrice || !s.stopLoss || !s.takeProfit1 || !s.takeProfit2) return false;
         return now - new Date(s.createdAt).getTime() <= SIGNAL_MAX_AGE_MS;
       });
