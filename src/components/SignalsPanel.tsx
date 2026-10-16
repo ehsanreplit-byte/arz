@@ -96,7 +96,12 @@ function SignalsBreakdown({ items }: { items: SignalMethodItem[] }) {
           className="rounded-lg border border-slate-200 bg-white p-3 space-y-1.5"
         >
           <div className="flex items-start justify-between gap-2">
-            <span className="text-[11px] font-bold text-slate-900 leading-5">{s.title}</span>
+            <span className="text-[11px] font-bold text-slate-900 leading-5">
+              {s.title}
+              {s.isSummary && (
+                <span className="mr-1 text-[9px] font-bold text-slate-400">(بدون رأی)</span>
+              )}
+            </span>
             <span className="text-[10px] font-mono-tabular text-slate-400 shrink-0">
               {s.score}
             </span>
