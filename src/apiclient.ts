@@ -603,6 +603,8 @@ export interface TradeEngineStatus {
 
 export interface SignalMethodItem {
   id: string;
+  /** true for method 6: shown for information, never counted as a vote */
+  isSummary?: boolean;
   title: string;
   direction: 'LONG' | 'SHORT' | 'NO TRADE';
   setupName: string;
@@ -637,6 +639,7 @@ export interface RegisteredSignalInfo {
   chatGptSetupName: string;
   chatGptReasoning: string;
   aiEngineUsed: string;
+  aiVoteCounted?: boolean;
   cycleNumber: number;
   createdAt: string;
   dispatchedToTrade?: boolean;
