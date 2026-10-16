@@ -640,6 +640,7 @@ export interface RegisteredSignalInfo {
   chatGptReasoning: string;
   aiEngineUsed: string;
   aiVoteCounted?: boolean;
+  singleMethodDirection?: 'LONG' | 'SHORT' | 'NO TRADE' | '';
   cycleNumber: number;
   createdAt: string;
   dispatchedToTrade?: boolean;
