@@ -53,6 +53,8 @@ export interface SignalCycleSymbolResult {
   tradeNote?: string;
   chatGptStatus: string;
   aiEngineUsed: string;
+  /** true when the ChatGPT verdict was a real AI answer and counted as a vote */
+  aiVoteCounted?: boolean;
   error?: string;
 }
 
@@ -209,6 +211,9 @@ function buildSignalsBreakdown(
     },
     {
       id: 'summary',
+      // shown for information only — it summarises the five methods above and
+      // must never be counted as an independent vote
+      isSummary: true,
       title: m6.titleFa,
       direction: m6.recommendedDirection,
       setupName: m6.selectedMethodTitleFa || 'جمع‌بندی',
@@ -514,9 +519,39 @@ class SignalEngine {
           });
 
           const breakdown = buildSignalsBreakdown(analysis);
-          const buySignalsCount = breakdown.filter((s) => s.direction === 'LONG').length;
-          const sellSignalsCount = breakdown.filter((s) => s.direction === 'SHORT').length;
-          const totalSignalsChecked = breakdown.length;
+
+          // ---- who gets to vote ----
+          // Method 6 is a SUMMARY of the other five, so counting it would double
+          // count the same opinion. It is shown in the UI but never votes.
+          const votingMethods = breakdown.filter((s) => s.id !== 'summary');
+          const methodBuy = votingMethods.filter((s) => s.direction === 'LONG').length;
+          const methodSell = votingMethods.filter((s) => s.direction === 'SHORT').length;
+
+          // --- Request to ChatGPT for this symbol (30s gap between send times) ---
+          const verdict = await askChatGptVerdict({
+            symbol,
+            label: result.label,
+            analysis,
+            breakdown: votingMethods,
+            buySignalsCount: methodBuy,
+            sellSignalsCount: methodSell,
+          });
+
+          // The AI opinion is a real, independent sixth vote — but ONLY when it
+          // is an actual ChatGPT answer. When the endpoint is unreachable the
+          // verdict falls back to the local consensus, and counting that would
+          // be double counting all over again.
+          const aiIsReal = verdict.engineUsed.startsWith('ChatGPT');
+          const aiVote: 'LONG' | 'SHORT' | 'NO TRADE' =
+            aiIsReal && verdict.direction !== 'NO TRADE' ? verdict.direction : 'NO TRADE';
+
+          const votes: Array<'LONG' | 'SHORT' | 'NO TRADE'> = [
+            ...votingMethods.map((s) => s.direction),
+            aiVote,
+          ];
+          const buySignalsCount = votes.filter((d) => d === 'LONG').length;
+          const sellSignalsCount = votes.filter((d) => d === 'SHORT').length;
+          const totalSignalsChecked = votes.length;
           const matchedSignalsCount = Math.max(buySignalsCount, sellSignalsCount);
           const isQualified = matchedSignalsCount >= MIN_CONSENSUS;
           const consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE' =
@@ -526,16 +561,6 @@ class SignalEngine {
                 ? 'LONG'
                 : 'SHORT';
 
-          // --- Request to ChatGPT for this symbol (30s gap between send times) ---
-          const verdict = await askChatGptVerdict({
-            symbol,
-            label: result.label,
-            analysis,
-            breakdown,
-            buySignalsCount,
-            sellSignalsCount,
-          });
-
           result.buySignalsCount = buySignalsCount;
           result.sellSignalsCount = sellSignalsCount;
           result.totalSignalsChecked = totalSignalsChecked;
@@ -544,6 +569,7 @@ class SignalEngine {
           result.qualified = isQualified;
           result.chatGptStatus = verdict.status;
           result.aiEngineUsed = verdict.engineUsed;
+          result.aiVoteCounted = aiIsReal && aiVote !== 'NO TRADE';
 
           // Record EVERY evaluated watchlist symbol (qualified or not) so the
           // table shows the live price and signal status of all added coins.
@@ -577,6 +603,7 @@ class SignalEngine {
             chatGptSetupName: verdict.setupName,
             chatGptReasoning: verdict.reasoning,
             aiEngineUsed: verdict.engineUsed,
+            aiVoteCounted: aiIsReal && aiVote !== 'NO TRADE',
             cycleNumber,
           };
 
