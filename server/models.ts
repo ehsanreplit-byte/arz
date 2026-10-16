@@ -69,6 +69,8 @@ export interface IAvalAIConfig {
 
 export interface ISignalMethodItem {
   id: string;
+  /** true for method 6: shown for information, never counted as a vote */
+  isSummary?: boolean;
   title: string;
   direction: 'LONG' | 'SHORT' | 'NO TRADE';
   setupName: string;
@@ -103,6 +105,8 @@ export interface IRegisteredSignal {
   chatGptSetupName: string;
   chatGptReasoning: string;
   aiEngineUsed: string;
+  /** true when a real ChatGPT verdict counted as a vote */
+  aiVoteCounted?: boolean;
   cycleNumber: number;
   createdAt: string;
   /** true when this qualified signal was pushed straight to the trade engine */
@@ -305,6 +309,7 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   chatGptSetupName: { type: String, default: '' },
   chatGptReasoning: { type: String, default: '' },
   aiEngineUsed: { type: String, default: '' },
+  aiVoteCounted: { type: Boolean, default: false },
   cycleNumber: { type: Number, default: 1 },
   createdAt: { type: String, default: () => new Date().toISOString() },
   dispatchedToTrade: { type: Boolean, default: false },
