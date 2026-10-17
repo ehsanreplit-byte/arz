@@ -641,6 +641,7 @@ export interface RegisteredSignalInfo {
   aiEngineUsed: string;
   aiVoteCounted?: boolean;
   singleMethodDirection?: 'LONG' | 'SHORT' | 'NO TRADE' | '';
+  levelsAveragedFrom?: number;
   cycleNumber: number;
   createdAt: string;
   dispatchedToTrade?: boolean;
