@@ -58,6 +58,8 @@ export interface SignalCycleSymbolResult {
   aiVoteCounted?: boolean;
   /** direction voted by the independent single-method Al Brooks signal */
   singleMethodDirection?: 'LONG' | 'SHORT' | 'NO TRADE';
+  /** how many agreeing methods were averaged into the order levels (0 = fallback) */
+  levelsAveragedFrom?: number;
   error?: string;
 }
 
@@ -586,9 +588,80 @@ class SignalEngine {
 
           // Record EVERY evaluated watchlist symbol (qualified or not) so the
           // table shows the live price and signal status of all added coins.
-          const matching = breakdown.filter((s) => s.direction === consensusDirection);
+          // ---- consensus levels: AVERAGE the agreeing methods ----
+          // Every method that agrees with the consensus direction contributes its
+          // own entry / stop / targets and the order uses the average of them,
+          // instead of the levels of one single method. Method 6 is excluded: it
+          // only mirrors the others and would double-weight the same opinion.
+          type LevelSource = {
+            entryPrice?: number;
+            stopLoss?: number;
+            takeProfit1?: number;
+            takeProfit2?: number;
+          };
+
+          const agreeing: LevelSource[] = breakdown
+            .filter((s) => s.direction === consensusDirection && s.id !== 'summary')
+            .map((s) => ({
+              entryPrice: s.entryPrice,
+              stopLoss: s.stopLoss,
+              takeProfit1: s.takeProfit1,
+              takeProfit2: s.takeProfit2,
+            }));
+
+          // the independent single-method signal joins the average when it agrees
+          if (singleMethod && singleVote === consensusDirection) {
+            agreeing.push({
+              entryPrice: singleMethod.entryPrice,
+              stopLoss: singleMethod.stopLoss,
+              takeProfit1: singleMethod.takeProfit1,
+              takeProfit2: singleMethod.takeProfit2,
+            });
+          }
+
+          const averageOf = (pick: (s: LevelSource) => number | undefined): number | null => {
+            const vals = agreeing
+              .map(pick)
+              .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+            if (vals.length === 0) return null;
+            return vals.reduce((a, b) => a + b, 0) / vals.length;
+          };
+
           const primary =
-            matching.find((s) => s.id === 'summary') || matching[0] || breakdown[0];
+            breakdown.find((s) => s.id === 'summary' && s.direction === consensusDirection) ||
+            breakdown.find((s) => s.direction === consensusDirection) ||
+            breakdown[0];
+
+          let entryPrice =
+            averageOf((s) => s.entryPrice) ??
+            (Number(primary?.entryPrice) || analysis.currentLivePrice);
+          let stopLoss = averageOf((s) => s.stopLoss) ?? Number(primary?.stopLoss) ?? 0;
+          let takeProfit1 = averageOf((s) => s.takeProfit1) ?? Number(primary?.takeProfit1) ?? 0;
+          let takeProfit2 = averageOf((s) => s.takeProfit2) ?? Number(primary?.takeProfit2) ?? 0;
+
+          // ---- sanity check: averaged levels must stay on the right side ----
+          const levelsValid =
+            consensusDirection === 'LONG'
+              ? stopLoss > 0 &&
+                stopLoss < entryPrice &&
+                takeProfit1 > entryPrice &&
+                takeProfit2 > takeProfit1
+              : consensusDirection === 'SHORT'
+                ? stopLoss > entryPrice &&
+                  takeProfit1 > 0 &&
+                  takeProfit1 < entryPrice &&
+                  takeProfit2 < takeProfit1
+                : false;
+
+          if (!levelsValid) {
+            // fall back to a single method's levels when the average is incoherent
+            entryPrice = Number(primary?.entryPrice) || analysis.currentLivePrice;
+            stopLoss = Number(primary?.stopLoss) || 0;
+            takeProfit1 = Number(primary?.takeProfit1) || 0;
+            takeProfit2 = Number(primary?.takeProfit2) || 0;
+          }
+
+          result.levelsAveragedFrom = levelsValid ? agreeing.length : 0;
           const avgScore =
             breakdown.reduce((acc, s) => acc + (Number(s.score) || 0), 0) /
             Math.max(1, breakdown.length);
@@ -604,10 +677,11 @@ class SignalEngine {
             totalSignalsChecked,
             matchedSignalsCount,
             currentPrice: analysis.currentLivePrice,
-            entryPrice: Number(primary?.entryPrice) || analysis.currentLivePrice,
-            stopLoss: Number(primary?.stopLoss) || 0,
-            takeProfit1: Number(primary?.takeProfit1) || 0,
-            takeProfit2: Number(primary?.takeProfit2) || 0,
+            entryPrice,
+            stopLoss,
+            takeProfit1,
+            takeProfit2,
+            levelsAveragedFrom: levelsValid ? agreeing.length : 0,
             riskRewardRatio: analysis.method6Summary.trade.riskRewardFormatted || '—',
             averageScore: Math.round(avgScore * 10) / 10,
             signalsBreakdown: breakdown,
