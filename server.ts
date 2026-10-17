@@ -2424,6 +2424,7 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         kv('سیگنال خرید / فروش', `${s.buySignalsCount} / ${s.sellSignalsCount}`);
         kv('تعداد رأی‌ها', `${s.totalSignalsChecked} رأی (۵ روش + سیگنال تک‌روش + نظر ChatGPT)`);
         kv('رأی سیگنال تک‌روش', (s as any).singleMethodDirection || '—');
+        kv('میانگین‌گیری سطوح', (s as any).levelsAveragedFrom > 0 ? `از ${(s as any).levelsAveragedFrom} روش ✅` : 'میانگین نشد (سطح تک‌روش)');
         kv('رأی ChatGPT شمرده شد؟', (s as any).aiVoteCounted ? 'بله ✅' : 'خیر (پاسخ هوش مصنوعی نبود)');
         kv('تعداد سیگنال هم‌جهت', s.matchedSignalsCount);
         kv('قیمت لحظه‌ای هنگام تحلیل', num(s.currentPrice));
