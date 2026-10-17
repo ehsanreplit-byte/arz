@@ -109,6 +109,8 @@ export interface IRegisteredSignal {
   aiVoteCounted?: boolean;
   /** direction voted by the independent single-method Al Brooks signal */
   singleMethodDirection?: string;
+  /** how many agreeing methods were averaged into the order levels (0 = fallback) */
+  levelsAveragedFrom?: number;
   cycleNumber: number;
   createdAt: string;
   /** true when this qualified signal was pushed straight to the trade engine */
@@ -313,6 +315,7 @@ const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
   aiEngineUsed: { type: String, default: '' },
   aiVoteCounted: { type: Boolean, default: false },
   singleMethodDirection: { type: String, default: '' },
+  levelsAveragedFrom: { type: Number, default: 0 },
   cycleNumber: { type: Number, default: 1 },
   createdAt: { type: String, default: () => new Date().toISOString() },
   dispatchedToTrade: { type: Boolean, default: false },
