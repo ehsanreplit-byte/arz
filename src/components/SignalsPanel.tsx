@@ -84,6 +84,9 @@ function DirectionBadge({ direction }: { direction: 'LONG' | 'SHORT' | 'NO TRADE
   );
 }
 
+/** How many rows the "همه" tab shows before it is trimmed. */
+const ALL_TAB_LIMIT = 50;
+
 function SignalsBreakdown({ items }: { items: SignalMethodItem[] }) {
   if (!items || items.length === 0) {
     return <div className="text-xs text-slate-500">جزئیات سیگنال ثبت نشده است.</div>;
@@ -222,7 +225,7 @@ export function SignalsPanel() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toUpperCase();
-    return signals
+    const rows = signals
       .filter((s) => {
         if (directionFilter === 'QUALIFIED' && !s.isQualified) return false;
         if (
@@ -241,6 +244,13 @@ export function SignalsPanel() {
         if (a.isQualified !== b.isQualified) return a.isQualified ? -1 : 1;
         return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
       });
+
+    // The "همه" tab would otherwise list every evaluated symbol and become
+    // unreadable, so it is trimmed to the newest few. The qualified / buy /
+    // sell tabs always list every matching symbol. A search always looks at
+    // everything, regardless of the tab.
+    if (directionFilter === 'ALL' && !q) return rows.slice(0, ALL_TAB_LIMIT);
+    return rows;
   }, [signals, search, directionFilter]);
 
   const qualifiedCount = signals.filter((s) => s.isQualified).length;
@@ -486,6 +496,9 @@ export function SignalsPanel() {
         </div>
         <div className="text-xs text-slate-500 font-mono-tabular">
           {filtered.length} / {signals.length}
+          {directionFilter === 'ALL' && !search.trim() && signals.length > ALL_TAB_LIMIT && (
+            <span className="text-amber-600"> · فقط {ALL_TAB_LIMIT} مورد آخر</span>
+          )}
         </div>
       </div>
 
