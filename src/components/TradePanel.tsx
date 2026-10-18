@@ -22,6 +22,7 @@ import {
   apiClient,
   PositionDiagnostics,
   PositionInfo,
+  TradeCloseEvent,
   TradeEngineStatus,
 } from '../apiclient';
 
@@ -126,16 +127,19 @@ export function TradePanel() {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'active' | 'history'>('active');
+  const [tab, setTab] = useState<'active' | 'history' | 'events'>('active');
+  const [events, setEvents] = useState<TradeCloseEvent[]>([]);
 
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
     try {
-      const [posRes, statusRes] = await Promise.all([
+      const [posRes, statusRes, histRes] = await Promise.all([
         apiClient.getPositions(),
         apiClient.getTradeStatus(),
+        apiClient.getTradeHistory(),
       ]);
       setPositions(posRes.positions || []);
+      setEvents(histRes.events || []);
       setAccountKey(posRes.userId || null);
       setDiag(posRes.diagnostics || null);
       setEngine(statusRes.status);
@@ -168,6 +172,17 @@ export function TradePanel() {
       if (!q) return rows;
       return rows.filter(
         (p) => p.symbol.toUpperCase().includes(q) || (p.label || '').toUpperCase().includes(q)
+      );
+    },
+    [search]
+  );
+
+  const filterRows2 = useCallback(
+    (rows: TradeCloseEvent[]) => {
+      const q = search.trim().toUpperCase();
+      if (!q) return rows;
+      return rows.filter(
+        (e) => e.symbol.toUpperCase().includes(q) || (e.label || '').toUpperCase().includes(q)
       );
     },
     [search]
@@ -228,6 +243,7 @@ export function TradePanel() {
   };
 
   const rows = filterRows(tab === 'active' ? active : history);
+  const eventRows = filterRows2(events);
 
   return (
     <div className="space-y-6">
@@ -439,6 +455,7 @@ export function TradePanel() {
             [
               ['active', `پوزیشن‌های فعال (${active.length})`],
               ['history', `تاریخچه بسته‌شده (${history.length})`],
+              ['events', `تاریخچه بستن‌ها (${events.length})`],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -474,6 +491,82 @@ export function TradePanel() {
             <Loader2 className="w-5 h-5 text-blue-600 animate-spin" />
             <span className="text-xs font-semibold text-slate-600">در حال بارگذاری...</span>
           </div>
+        ) : tab === 'events' ? (
+          eventRows.length === 0 ? (
+            <div className="p-10 text-center space-y-2">
+              <History className="w-8 h-8 text-slate-300 mx-auto" />
+              <p className="text-xs font-semibold text-slate-700">
+                هنوز هیچ بستنی ثبت نشده است
+              </p>
+              <p className="text-xs text-slate-500 max-w-lg mx-auto leading-6">
+                وقتی قیمت به حد سود اول برسد، ۵۰٪ معامله بسته می‌شود و سود آن بلافاصله به موجودی
+                حساب اضافه می‌گردد — همان لحظه اینجا ثبت می‌شود.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-right border-collapse min-w-[900px]">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    {['زمان', 'نماد', 'سمت', 'نوع بستن', 'قیمت بستن', 'حجم', 'سود/زیان', 'وضعیت پوزیشن'].map(
+                      (h) => (
+                        <th
+                          key={h}
+                          className="px-4 py-3 text-xs font-bold text-slate-600 whitespace-nowrap"
+                        >
+                          {h}
+                        </th>
+                      )
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {eventRows.map((e) => (
+                    <tr key={e.id} className="border-b border-slate-100 hover:bg-slate-50/70">
+                      <td className="px-4 py-3 text-[11px] font-mono-tabular text-slate-600 whitespace-nowrap">
+                        {dt(e.at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="text-xs font-bold text-slate-900">{e.symbol}</div>
+                        <div className="text-[10px] text-slate-400">{e.leverage}x</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <SideBadge side={e.side} />
+                      </td>
+                      <td className="px-4 py-3">
+                        {e.type === 'PARTIAL_CLOSE' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap">
+                            بستن ۵۰٪ در TP1
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 whitespace-nowrap">
+                            بستن کامل
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono-tabular text-slate-700">
+                        {price(e.price)}
+                      </td>
+                      <td className="px-4 py-3 text-xs font-mono-tabular text-slate-700">
+                        {e.quantity ? e.quantity.toFixed(6) : '—'}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-xs font-extrabold font-mono-tabular whitespace-nowrap ${
+                          e.pnl >= 0 ? 'text-emerald-600' : 'text-rose-600'
+                        }`}
+                      >
+                        {e.pnl >= 0 ? '+' : ''}
+                        {e.pnl.toFixed(2)}$
+                      </td>
+                      <td className="px-4 py-3 text-[11px] text-slate-500 whitespace-nowrap">
+                        {e.positionStatus === 'OPEN' ? 'باز (۵۰٪ باقی‌مانده)' : 'بسته‌شده'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
         ) : rows.length === 0 ? (
           <div className="p-10 text-center space-y-2">
             <History className="w-8 h-8 text-slate-300 mx-auto" />
