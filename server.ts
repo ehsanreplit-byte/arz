@@ -2313,6 +2313,47 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
     }
   });
 
+  /**
+   * Every close event of the caller's positions — partial (TP1) AND full.
+   * A TP1 close leaves the position OPEN, so it never showed up in the closed
+   * history even though its profit was already applied to the balance. This
+   * endpoint makes those events visible.
+   */
+  app.get('/api/trade/history', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const positions = await dbRepo.getPositions(userId);
+      const events: Array<Record<string, unknown>> = [];
+
+      for (const p of positions) {
+        for (const f of p.fills || []) {
+          if (f.type !== 'PARTIAL_CLOSE' && f.type !== 'CLOSE') continue;
+          events.push({
+            id: `${p._id}-${f.at}-${f.type}`,
+            positionId: p._id,
+            symbol: p.symbol,
+            label: p.label,
+            side: p.side,
+            leverage: p.leverage,
+            type: f.type,
+            price: f.price,
+            quantity: f.quantity,
+            pnl: f.pnl,
+            note: f.note,
+            at: f.at,
+            entryPrice: p.entryPrice,
+            positionStatus: p.status,
+          });
+        }
+      }
+
+      events.sort((a: any, b: any) => new Date(b.at).getTime() - new Date(a.at).getTime());
+      res.json({ events, userId });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن تاریخچه معاملات' });
+    }
+  });
+
   app.get('/api/trade/status', authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
     res.json({ status: tradeEngine.getState() });
   });
@@ -2524,6 +2565,30 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       const realized = positions.reduce((a, p) => a + (Number(p.realizedPnl) || 0), 0);
       const wins = closed.filter((p) => (Number(p.realizedPnl) || 0) > 0).length;
       const losses = closed.filter((p) => (Number(p.realizedPnl) || 0) < 0).length;
+
+      const partialEvents = positions.flatMap((p) =>
+        (p.fills || [])
+          .filter((f) => f.type === 'PARTIAL_CLOSE')
+          .map((f) => ({ p, f }))
+      );
+      line('بخش ۲.۵ — بستن‌های جزئی (TP1)');
+      rule('=');
+      line();
+      if (partialEvents.length === 0) {
+        line('  هنوز هیچ حد سود اولی زده نشده است.');
+        line();
+      } else {
+        for (const { p, f } of partialEvents) {
+          kv('نماد', p.symbol);
+          kv('زمان (ISO)', f.at);
+          kv('زمان (ایران)', faTime(f.at));
+          kv('قیمت بستن', num(f.price));
+          kv('حجم بسته‌شده', num(f.quantity));
+          kv('سود/زیان این بستن', `$ ${num(f.pnl, 2)}`);
+          kv('وضعیت پوزیشن', p.status === 'OPEN' ? 'باز (۵۰٪ باقی‌مانده)' : 'بسته‌شده');
+          line();
+        }
+      }
 
       line('بخش ۳ — خلاصه آماری');
       rule('=');
