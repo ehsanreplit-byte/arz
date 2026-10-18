@@ -375,7 +375,11 @@ export const apiClient = {
   },
 
   // Signals Engine API (سیگنال‌ها)
-  async getSignals(): Promise<{ signals: RegisteredSignalInfo[] }> {
+  async getSignals(): Promise<{
+    signals: RegisteredSignalInfo[];
+    total?: number;
+    shown?: number;
+  }> {
     return requestJson<{ signals: RegisteredSignalInfo[] }>('/api/signals');
   },
 
