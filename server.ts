@@ -2108,7 +2108,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
   app.get('/api/signals', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
     try {
       const signals = await dbRepo.getRegisteredSignals();
-      res.json({ signals });
+      const total = await dbRepo.countRegisteredSignals();
+      res.json({ signals, total, shown: signals.length });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در خواندن سیگنال‌های ثبت‌شده' });
     }
