@@ -119,6 +119,7 @@ function SignalsBreakdown({ items }: { items: SignalMethodItem[] }) {
 
 export function SignalsPanel() {
   const [signals, setSignals] = useState<RegisteredSignalInfo[]>([]);
+  const [totalSignals, setTotalSignals] = useState<number | null>(null);
   const [status, setStatus] = useState<SignalEngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -140,6 +141,7 @@ export function SignalsPanel() {
         apiClient.getSignalsStatus(),
       ]);
       setSignals(signalsRes.signals || []);
+      setTotalSignals(signalsRes.total ?? null);
       setStatus(statusRes.status);
       setError(null);
     } catch (err: any) {
@@ -412,6 +414,12 @@ export function SignalsPanel() {
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
           <div className="text-xs text-slate-500">
             واجد شرایط (حداقل {status?.minConsensus || 3} سیگنال)
+            {totalSignals !== null && totalSignals > signals.length && (
+              <span className="block text-[10px] font-normal text-amber-600">
+                نمایش {signals.length.toLocaleString('en-US')} از{' '}
+                {totalSignals.toLocaleString('en-US')} رکورد
+              </span>
+            )}
           </div>
           <div className="text-2xl font-extrabold text-blue-600 font-mono-tabular">
             {qualifiedCount}
