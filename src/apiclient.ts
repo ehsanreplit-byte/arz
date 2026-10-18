@@ -698,6 +698,7 @@ export interface SignalEngineStatus {
   htfTimeframe: string;
   minConsensus: number;
   requestGapMs: number;
+  aiBatchSize?: number;
   cycleIntervalMs: number;
   lastRunAt: string | null;
   lastFinishedAt: string | null;
