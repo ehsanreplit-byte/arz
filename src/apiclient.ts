@@ -447,6 +447,10 @@ export const apiClient = {
     }>('/api/trade/positions');
   },
 
+  async getTradeHistory(): Promise<{ events: TradeCloseEvent[]; userId?: string }> {
+    return requestJson<{ events: TradeCloseEvent[]; userId?: string }>('/api/trade/history');
+  },
+
   async getTradeStatus(): Promise<{ status: TradeEngineStatus }> {
     return requestJson<{ status: TradeEngineStatus }>('/api/trade/status');
   },
@@ -564,6 +568,24 @@ export interface TradeTickSummary {
   filled: number;
   partiallyClosed: number;
   closed: number;
+}
+
+export interface TradeCloseEvent {
+  id: string;
+  positionId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  leverage: number;
+  /** PARTIAL_CLOSE = 50% closed at TP1, CLOSE = the rest closed */
+  type: 'PARTIAL_CLOSE' | 'CLOSE';
+  price: number;
+  quantity: number;
+  pnl: number;
+  note: string;
+  at: string;
+  entryPrice: number;
+  positionStatus: string;
 }
 
 export interface PositionDiagnostics {
