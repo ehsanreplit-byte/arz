@@ -346,6 +346,12 @@ interface PersistentStoreData {
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const STORE_PATH = path.join(DATA_DIR, 'mongodb_collections.json');
+/**
+ * How many registered signals are kept and returned. The old hard-coded 1200
+ * silently hid everything older, so the table looked "stuck" at 1200 no matter
+ * how many cycles had run.
+ */
+const SIGNAL_STORE_LIMIT = Math.max(100, Number(process.env.SIGNAL_STORE_LIMIT || 20000));;
 
 const DEFAULT_SYMBOLS: Omit<ICryptoSymbol, '_id' | 'createdAt'>[] = [
   { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', label: 'بیت‌کوین (Bitcoin)' },
@@ -980,7 +986,10 @@ class DatabaseEngine {
     }
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
       try {
-        const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(1200).lean();
+        const docs = await RegisteredSignalModel.find()
+          .sort({ createdAt: -1 })
+          .limit(SIGNAL_STORE_LIMIT)
+          .lean();
         for (const d of docs) byId.set(String((d as any)._id), { ...(d as any), _id: String((d as any)._id) });
       } catch {
         /* ignore */
@@ -991,9 +1000,38 @@ class DatabaseEngine {
     );
   }
 
+  /**
+   * Total number of DISTINCT signals available across both stores — the honest
+   * number behind the table, so the UI can tell the user when it is truncated.
+   */
+  public async countRegisteredSignals(): Promise<number> {
+    const ids = new Set<string>();
+    for (const s of Array.isArray(this.store.registeredSignals)
+      ? this.store.registeredSignals
+      : []) {
+      ids.add(String(s._id));
+    }
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const docs = await RegisteredSignalModel.find()
+          .select('_id')
+          .sort({ createdAt: -1 })
+          .limit(SIGNAL_STORE_LIMIT)
+          .lean();
+        for (const d of docs) ids.add(String((d as any)._id));
+      } catch {
+        /* ignore */
+      }
+    }
+    return ids.size;
+  }
+
   private async getRegisteredSignalsLegacy(): Promise<IRegisteredSignal[]> {
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
-      const docs = await RegisteredSignalModel.find().sort({ createdAt: -1 }).limit(1200).lean();
+      const docs = await RegisteredSignalModel.find()
+        .sort({ createdAt: -1 })
+        .limit(SIGNAL_STORE_LIMIT)
+        .lean();
       return docs.map((d) => ({ ...d, _id: String(d._id) }));
     }
     const list = Array.isArray(this.store.registeredSignals) ? this.store.registeredSignals : [];
@@ -1021,8 +1059,8 @@ class DatabaseEngine {
       this.store.registeredSignals = [];
     }
     this.store.registeredSignals.unshift(newSig);
-    if (this.store.registeredSignals.length > 1200) {
-      this.store.registeredSignals = this.store.registeredSignals.slice(0, 1200);
+    if (this.store.registeredSignals.length > SIGNAL_STORE_LIMIT) {
+      this.store.registeredSignals = this.store.registeredSignals.slice(0, SIGNAL_STORE_LIMIT);
     }
     this.saveDiskStore();
     return newSig;
