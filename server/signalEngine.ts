@@ -34,7 +34,13 @@ const SIGNAL_TIMEFRAME = (process.env.SIGNAL_TIMEFRAME || '15m').trim();
 const HTF_TIMEFRAME = (process.env.SIGNAL_HTF_TIMEFRAME || '1h').trim();
 const MIN_CONSENSUS = Math.max(1, Number(process.env.SIGNAL_MIN_CONSENSUS || 3));
 const AI_ENABLED = process.env.SIGNAL_AI_ENABLED !== 'false';
-const AI_TIMEOUT_MS = Number(process.env.SIGNAL_AI_TIMEOUT_MS || 25_000);
+const AI_TIMEOUT_MS = Number(process.env.SIGNAL_AI_TIMEOUT_MS || 40_000);
+/**
+ * How many symbols are analysed per ChatGPT request. Batching cuts a cycle from
+ * one request per symbol down to one request per batch, so the whole cycle is
+ * much faster. 1 disables batching.
+ */
+const AI_BATCH_SIZE = Math.max(1, Number(process.env.SIGNAL_AI_BATCH_SIZE || 3));
 const RUN_ON_BOOT = process.env.SIGNAL_RUN_ON_BOOT === 'true';
 
 export interface SignalCycleSymbolResult {
@@ -71,6 +77,8 @@ export interface SignalEngineState {
   htfTimeframe: string;
   minConsensus: number;
   requestGapMs: number;
+  /** symbols analysed per ChatGPT request */
+  aiBatchSize: number;
   cycleIntervalMs: number;
   lastRunAt: string | null;
   lastFinishedAt: string | null;
@@ -92,6 +100,20 @@ interface ChatGptVerdict {
   setupName: string;
   reasoning: string;
   engineUsed: string;
+}
+
+/** One symbol, fully fetched and analysed once per cycle. */
+interface PreparedSymbol {
+  symbol: string;
+  label: string;
+  error: string | null;
+  candles: OhlcvCandle[];
+  analysis: FiveMethodsCompleteAnalysis | null;
+  breakdown: ISignalMethodItem[];
+  votingMethods: ISignalMethodItem[];
+  methodBuy: number;
+  methodSell: number;
+  verdict: ChatGptVerdict | null;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -366,8 +388,180 @@ async function askChatGptVerdict(params: {
 }
 
 // ---------------------------------------------------------------------------
+// Batched ChatGPT verdicts (several symbols in ONE request)
+// ---------------------------------------------------------------------------
+export interface BatchVerdictItem {
+  symbol: string;
+  label: string;
+  analysis: FiveMethodsCompleteAnalysis;
+  breakdown: ISignalMethodItem[];
+  buySignalsCount: number;
+  sellSignalsCount: number;
+}
+
+/** The offline verdict for one symbol, used whenever the AI is unavailable. */
+function buildLocalVerdict(item: BatchVerdictItem, status: string, reasoning: string): ChatGptVerdict {
+  const consensus: 'LONG' | 'SHORT' | 'NO TRADE' =
+    item.buySignalsCount > item.sellSignalsCount
+      ? 'LONG'
+      : item.sellSignalsCount > item.buySignalsCount
+        ? 'SHORT'
+        : 'NO TRADE';
+  return {
+    status,
+    direction: consensus,
+    setupName: item.analysis.method6Summary.selectedMethodTitleFa || 'تحلیل محلی ال بروکس',
+    reasoning,
+    engineUsed: 'Local Al Brooks 6-Method Engine',
+  };
+}
+
+/** Strips markdown fences and pulls the first JSON array out of a reply. */
+function parseVerdictArray(raw: string): any[] {
+  let text = String(raw || '').trim();
+  text = text.replace(/```json/gi, '```').replace(/```/g, '');
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  if (start === -1 || end === -1 || end <= start) return [];
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Asks ChatGPT for a verdict on SEVERAL symbols in a single request and returns
+ * one verdict per input item, in the same order. Any symbol the model failed to
+ * answer (or answered unusably) falls back to the local Al Brooks verdict, so a
+ * bad batch never costs the whole cycle.
+ */
+async function askChatGptVerdictsBatch(items: BatchVerdictItem[]): Promise<ChatGptVerdict[]> {
+  const fallbacks = items.map((it) =>
+    buildLocalVerdict(it, 'غیرفعال (تحلیل محلی)', 'نتیجه بر اساس موتور محلی ال بروکس ثبت شد.')
+  );
+  if (items.length === 0) return [];
+
+  const cfg = await dbRepo.getAvalAIConfig();
+  const apiKey = String(cfg.apiKey || '').trim();
+  const baseUrl = String(cfg.baseUrl || 'https://api.avalai.ir/v1').replace(/\/+$/, '');
+  const modelName = cfg.modelName || 'gpt-4o-mini';
+
+  if (!AI_ENABLED || !apiKey) {
+    return items.map((it) =>
+      buildLocalVerdict(
+        it,
+        AI_ENABLED ? 'تنظیمات ChatGPT در دسترس نیست' : 'غیرفعال (تحلیل محلی)',
+        AI_ENABLED
+          ? 'کلید API یا آدرس سرویس تنظیم نشده است؛ نتیجه بر اساس موتور محلی ثبت شد.'
+          : 'ارسال درخواست به ChatGPT غیرفعال است؛ نتیجه بر اساس موتور محلی ال بروکس ثبت شد.'
+      )
+    );
+  }
+
+  const blocks = items.map((it, idx) => {
+    const signalLines = it.breakdown
+      .map((s) => `   - ${s.title}: ${s.direction} (${s.setupName}, امتیاز ${s.score})`)
+      .join('\n');
+    return [
+      `${idx + 1}) نماد: ${it.symbol} (${it.label})`,
+      `   تایم‌فریم: ${it.analysis.interval} | قیمت لحظه‌ای: ${it.analysis.currentLivePrice}`,
+      `   EMA20: ${it.analysis.ema20} | ATR14: ${it.analysis.atr14}`,
+      `   تعداد سیگنال خرید: ${it.buySignalsCount} | تعداد سیگنال فروش: ${it.sellSignalsCount}`,
+      '   سیگنال‌های ال بروکس:',
+      signalLines,
+    ].join('\n');
+  });
+
+  const prompt = [
+    'برای هر نماد زیر یک تحلیل جدا انجام بده.',
+    '',
+    ...blocks,
+    '',
+    'فقط یک آرایه JSON با این ساختار برگردان (برای هر نماد یک عضو، به همان ترتیب):',
+    '[{"symbol":"نماد","direction":"LONG" | "SHORT" | "NO TRADE","setupName":"نام کوتاه فارسی ستاپ","reasoning":"یک تا دو جمله فارسی"}]',
+  ].join('\n');
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model: modelName,
+        temperature: 0.2,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'شما یک تحلیل‌گر حرفه‌ای پرایس اکشن ال بروکس هستید و فقط JSON معتبر برمی‌گردانید.',
+          },
+          { role: 'user', content: prompt },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: any = await res.json();
+    const raw = String(data?.choices?.[0]?.message?.content || '');
+    const parsed = parseVerdictArray(raw);
+
+    if (parsed.length === 0) {
+      throw new Error('پاسخ مدل آرایه JSON معتبر نبود');
+    }
+
+    // match each answer back to its symbol
+    const bySymbol = new Map<string, any>();
+    for (const row of parsed) {
+      const key = String(row?.symbol || '').trim().toUpperCase();
+      if (key) bySymbol.set(key, row);
+    }
+
+    return items.map((it, idx) => {
+      const row =
+        bySymbol.get(it.symbol.toUpperCase()) ||
+        parsed[idx] ||
+        null;
+      if (!row) {
+        return buildLocalVerdict(
+          it,
+          'پاسخ ناقص از ChatGPT',
+          'مدل برای این نماد پاسخی برنگرداند؛ نتیجه بر اساس موتور محلی ثبت شد.'
+        );
+      }
+      const dir: 'LONG' | 'SHORT' | 'NO TRADE' = ['LONG', 'SHORT'].includes(
+        String(row.direction || '').toUpperCase()
+      )
+        ? (String(row.direction).toUpperCase() as 'LONG' | 'SHORT')
+        : 'NO TRADE';
+      return {
+        status: 'موفق',
+        direction: dir,
+        setupName: String(row.setupName || '').trim() || 'بدون ستاپ',
+        reasoning: String(row.reasoning || '').trim() || '—',
+        engineUsed: `ChatGPT (${modelName})`,
+      };
+    });
+  } catch (err: any) {
+    const msg = err?.name === 'AbortError' ? 'Timeout' : err?.message || 'خطای شبکه';
+    return items.map((it) =>
+      buildLocalVerdict(
+        it,
+        `خطای ChatGPT: ${msg}`,
+        'ارتباط با ChatGPT برقرار نشد؛ نتیجه بر اساس موتور محلی ال بروکس ثبت شد.'
+      )
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // The engine
 // ---------------------------------------------------------------------------
+
 class SignalEngine {
   private timer: NodeJS.Timeout | null = null;
   private state: SignalEngineState = {
@@ -378,6 +572,7 @@ class SignalEngine {
     htfTimeframe: HTF_TIMEFRAME,
     minConsensus: MIN_CONSENSUS,
     requestGapMs: REQUEST_GAP_MS,
+    aiBatchSize: AI_BATCH_SIZE,
     cycleIntervalMs: CYCLE_INTERVAL_MS,
     lastRunAt: null,
     lastFinishedAt: null,
@@ -476,6 +671,86 @@ class SignalEngine {
       let evaluated = 0;
       let dispatched = 0;
 
+      // =====================================================================
+      // PHASE 1 — fetch and analyse every symbol once
+      // =====================================================================
+      const prepared = new Map<string, PreparedSymbol>();
+      for (const sym of symbols) {
+        const symbol = String(sym.symbol || '').toUpperCase();
+        const entry: PreparedSymbol = {
+          symbol,
+          label: sym.label || symbol,
+          error: null,
+          candles: [],
+          analysis: null,
+          breakdown: [],
+          votingMethods: [],
+          methodBuy: 0,
+          methodSell: 0,
+          verdict: null,
+        };
+        try {
+          const [candles, htfCandles] = await Promise.all([
+            fetchKlines(symbol, SIGNAL_TIMEFRAME, 401),
+            fetchKlines(symbol, HTF_TIMEFRAME, 401),
+          ]);
+          if (candles.length < 30) {
+            entry.error = 'داده کندل کافی از بایننس دریافت نشد.';
+          } else {
+            entry.candles = candles;
+            entry.analysis = analyzeAllFiveAlBrooksMethods({
+              symbol,
+              interval: SIGNAL_TIMEFRAME,
+              rawCandles: candles,
+              htfCandles,
+              higherTimeframeInterval: HTF_TIMEFRAME,
+            });
+            entry.breakdown = buildSignalsBreakdown(entry.analysis);
+            entry.votingMethods = entry.breakdown.filter((s) => s.id !== 'summary');
+            entry.methodBuy = entry.votingMethods.filter((s) => s.direction === 'LONG').length;
+            entry.methodSell = entry.votingMethods.filter((s) => s.direction === 'SHORT').length;
+          }
+        } catch (err: any) {
+          entry.error = err?.message || 'خطا در تحلیل نماد';
+        }
+        prepared.set(symbol, entry);
+      }
+
+      // =====================================================================
+      // PHASE 2 — ask the AI in batches (AI_BATCH_SIZE symbols per request)
+      // =====================================================================
+      const readyForAi = [...prepared.values()].filter((p) => !p.error && p.analysis);
+      for (let b = 0; b < readyForAi.length; b += AI_BATCH_SIZE) {
+        const batch = readyForAi.slice(b, b + AI_BATCH_SIZE);
+        const batchStartedAt = Date.now();
+        this.state.currentSymbol = batch.map((x) => x.symbol).join(' , ');
+        this.state.currentIndex = Math.min(b + batch.length, readyForAi.length);
+
+        const verdicts = await askChatGptVerdictsBatch(
+          batch.map((p) => ({
+            symbol: p.symbol,
+            label: p.label,
+            analysis: p.analysis as FiveMethodsCompleteAnalysis,
+            breakdown: p.votingMethods,
+            buySignalsCount: p.methodBuy,
+            sellSignalsCount: p.methodSell,
+          }))
+        );
+        batch.forEach((p, k) => {
+          p.verdict = verdicts[k] || null;
+        });
+
+        // Only space requests out when a REAL AI request was actually made —
+        // otherwise (AI disabled / unreachable) the wait would be pure delay.
+        const aiAnswered = verdicts.some((v) => v.engineUsed.startsWith('ChatGPT'));
+        if (aiAnswered && b + AI_BATCH_SIZE < readyForAi.length) {
+          await waitForRequestGap(batchStartedAt);
+        }
+      }
+
+      // =====================================================================
+      // PHASE 3 — record every symbol and hand qualified ones to the trade engine
+      // =====================================================================
       for (let i = 0; i < symbols.length; i++) {
         const sym = symbols[i];
         const symbol = String(sym.symbol || '').toUpperCase();
@@ -502,45 +777,35 @@ class SignalEngine {
         };
 
         try {
-          const [candles, htfCandles] = await Promise.all([
-            fetchKlines(symbol, SIGNAL_TIMEFRAME, 401),
-            fetchKlines(symbol, HTF_TIMEFRAME, 401),
-          ]);
+          const prep = prepared.get(symbol);
 
-          if (candles.length < 30) {
-            result.error = 'داده کندل کافی از بایننس دریافت نشد.';
+          if (!prep || prep.error || !prep.analysis) {
+            result.error = prep?.error || 'داده کندل کافی از بایننس دریافت نشد.';
             result.chatGptStatus = 'لغو شد (بدون داده)';
             this.state.lastCycleResults.push(result);
-            if (i < symbols.length - 1) await waitForRequestGap(requestStartedAt);
             continue;
           }
 
-          const analysis = analyzeAllFiveAlBrooksMethods({
-            symbol,
-            interval: SIGNAL_TIMEFRAME,
-            rawCandles: candles,
-            htfCandles,
-            higherTimeframeInterval: HTF_TIMEFRAME,
-          });
+          const candles = prep.candles;
+          const analysis = prep.analysis;
+          const breakdown = prep.breakdown;
+          const votingMethods = prep.votingMethods;
 
-          const breakdown = buildSignalsBreakdown(analysis);
-
-          // ---- who gets to vote ----
-          // Method 6 is a SUMMARY of the other five, so counting it would double
-          // count the same opinion. It is shown in the UI but never votes.
-          const votingMethods = breakdown.filter((s) => s.id !== 'summary');
-          const methodBuy = votingMethods.filter((s) => s.direction === 'LONG').length;
-          const methodSell = votingMethods.filter((s) => s.direction === 'SHORT').length;
-
-          // --- Request to ChatGPT for this symbol (30s gap between send times) ---
-          const verdict = await askChatGptVerdict({
-            symbol,
-            label: result.label,
-            analysis,
-            breakdown: votingMethods,
-            buySignalsCount: methodBuy,
-            sellSignalsCount: methodSell,
-          });
+          // verdict came from the batched AI request in PHASE 2
+          const verdict: ChatGptVerdict =
+            prep.verdict ||
+            buildLocalVerdict(
+              {
+                symbol,
+                label: result.label,
+                analysis,
+                breakdown: votingMethods,
+                buySignalsCount: prep.methodBuy,
+                sellSignalsCount: prep.methodSell,
+              },
+              'بدون پاسخ هوش مصنوعی',
+              'پاسخی از ChatGPT ثبت نشد؛ نتیجه بر اساس موتور محلی ال بروکس است.'
+            );
 
           // The AI opinion is a real, independent sixth vote — but ONLY when it
           // is an actual ChatGPT answer. When the endpoint is unreachable the
@@ -738,10 +1003,7 @@ class SignalEngine {
           this.state.lastCycleResults.push(result);
         }
 
-        // Keep consecutive ChatGPT requests REQUEST_GAP_MS (default 30s) apart.
-        if (i < symbols.length - 1) {
-          await waitForRequestGap(requestStartedAt);
-        }
+        // No per-symbol wait here: every AI call already happened in PHASE 2.
       }
 
       const durationMs = Date.now() - startedAt;
