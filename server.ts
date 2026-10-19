@@ -9,6 +9,7 @@ import { createServer as createViteServer } from 'vite';
 import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
 import { signalEngine } from './server/signalEngine.js';
+import { watchlistRefresher } from './server/watchlistRefresh.js';
 import {
   tradeEngine,
   fetchPrices,
@@ -123,6 +124,7 @@ async function startServer() {
   await telegramWorker.initialize();
   signalEngine.initialize();
   tradeEngine.initialize();
+  watchlistRefresher.initialize();
 
   // ==========================================================================
   // 1. Auth Routes (JWT + bcryptjs + MongoDB)
@@ -311,6 +313,29 @@ async function startServer() {
       res.json({ ok: true, symbols });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در حذف ارز' });
+    }
+  });
+
+  // ---- Automatic watchlist (top market cap + most volatile, daily 08:00) ----
+  app.get('/api/watchlist/auto/status', authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
+    res.json({ status: watchlistRefresher.getState() });
+  });
+
+  app.post('/api/watchlist/auto/refresh', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const result = await watchlistRefresher.refresh('manual');
+      if (!result.ok) {
+        res.status(502).json({ ok: false, error: result.error, status: watchlistRefresher.getState() });
+        return;
+      }
+      res.json({
+        ok: true,
+        summary: result.summary,
+        status: watchlistRefresher.getState(),
+        symbols: await dbRepo.getSymbols(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در به‌روزرسانی خودکار لیست ارزها' });
     }
   });
 
