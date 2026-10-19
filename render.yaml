@@ -31,3 +31,13 @@ services:
         value: "pullback"
       - key: SIGNAL_CYCLE_INTERVAL_MS
         value: "1800000"
+      - key: WATCHLIST_AUTO_REFRESH
+        value: "true"
+      - key: WATCHLIST_TOP_MARKETCAP
+        value: "30"
+      - key: WATCHLIST_TOP_VOLATILE
+        value: "20"
+      - key: WATCHLIST_REFRESH_HOUR
+        value: "8"
+      - key: WATCHLIST_REFRESH_TZ
+        value: "Asia/Tehran"
