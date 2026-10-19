@@ -14,7 +14,7 @@ import {
   Link2,
   BarChart2,
 } from 'lucide-react';
-import { apiClient, WatchlistSymbol } from '../apiclient';
+import { apiClient, WatchlistSymbol, WatchlistAutoStatus } from '../apiclient';
 import { CryptoLiveChart } from './CryptoLiveChart';
 
 export interface LiveTickerData {
@@ -130,7 +130,46 @@ export function BinanceMarketPage({
   const [error, setError] = useState<string | null>(null);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
   const [showCodeModal, setShowCodeModal] = useState(false);
+  const [autoStatus, setAutoStatus] = useState<WatchlistAutoStatus | null>(null);
+  const [autoRefreshing, setAutoRefreshing] = useState(false);
+  const [autoMessage, setAutoMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiClient
+      .getWatchlistAutoStatus()
+      .then((res) => {
+        if (!cancelled) setAutoStatus(res.status);
+      })
+      .catch(() => {
+        /* status is informational only */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleAutoRefresh = async () => {
+    setError(null);
+    setAutoMessage(null);
+    setAutoRefreshing(true);
+    try {
+      const res = await apiClient.refreshWatchlistAuto();
+      onSymbolsChange(res.symbols);
+      setAutoStatus(res.status);
+      const s = res.summary;
+      setAutoMessage(
+        s
+          ? `لیست به‌روزرسانی شد: ${s.marketCapSymbols.length} ارز برتر مارکت‌کپ + ${s.volatileSymbols.length} ارز پرنوسان (${s.total} نماد).`
+          : 'لیست به‌روزرسانی شد.'
+      );
+    } catch (err: any) {
+      setError(err?.message || 'خطا در به‌روزرسانی خودکار لیست ارزها');
+    } finally {
+      setAutoRefreshing(false);
+    }
+  };
 
   const handleAddSymbol = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -286,6 +325,75 @@ export function BinanceMarketPage({
         selectedSymbol={selectedChartSymbol}
         onSelectSymbol={(sym) => setSelectedChartSymbol(sym)}
       />
+
+      {/* Automatic Watchlist (top market cap + most volatile, daily 08:00) */}
+      <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+          <div className="space-y-1">
+            <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <BarChart2 className="w-4 h-4 text-blue-600" />
+              <span>لیست خودکار بازار (۳۰ ارز برتر + ۲۰ ارز پرنوسان)</span>
+            </h3>
+            <p className="text-xs text-slate-500">
+              هر روز ساعت{' '}
+              <span className="font-mono-tabular">
+                {String(autoStatus?.refreshHour ?? 8).padStart(2, '0')}:
+                {String(autoStatus?.refreshMinute ?? 0).padStart(2, '0')}
+              </span>{' '}
+              به وقت {autoStatus?.refreshTimezone || 'Asia/Tehran'} به‌صورت خودکار از ۳۰ ارز اول بازار (مارکت‌کپ)
+              و ۲۰ ارز پرنوسان ۲۴ ساعت گذشته بازسازی می‌شود. ارزهایی که دستی اضافه کرده‌اید حفظ می‌شوند.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleAutoRefresh}
+            disabled={autoRefreshing}
+            className="px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${autoRefreshing ? 'animate-spin' : ''}`} />
+            <span>{autoRefreshing ? 'در حال به‌روزرسانی...' : 'به‌روزرسانی همین حالا'}</span>
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-xs text-slate-600">
+          <span>
+            آخرین به‌روزرسانی:{' '}
+            <span className="font-semibold text-slate-800">
+              {autoStatus?.lastRefreshAt
+                ? new Date(autoStatus.lastRefreshAt).toLocaleString('fa-IR')
+                : 'هنوز اجرا نشده'}
+            </span>
+          </span>
+          <span>
+            به‌روزرسانی بعدی:{' '}
+            <span className="font-semibold text-slate-800">
+              {autoStatus?.nextRefreshAt
+                ? new Date(autoStatus.nextRefreshAt).toLocaleString('fa-IR')
+                : '—'}
+            </span>
+          </span>
+          {autoStatus?.lastSummary && (
+            <span>
+              ترکیب فعلی:{' '}
+              <span className="font-semibold text-slate-800">
+                {autoStatus.lastSummary.marketCapSymbols.length} برتر +{' '}
+                {autoStatus.lastSummary.volatileSymbols.length} پرنوسان
+              </span>
+            </span>
+          )}
+        </div>
+
+        {autoStatus?.lastError && (
+          <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs">
+            آخرین خطای به‌روزرسانی خودکار: {autoStatus.lastError}
+          </div>
+        )}
+        {autoMessage && (
+          <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs">
+            {autoMessage}
+          </div>
+        )}
+      </div>
 
       {/* Add New Coin Form + Quick Suggestions */}
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
