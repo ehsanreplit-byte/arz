@@ -798,6 +798,74 @@ class DatabaseEngine {
     return this.store.symbols.length < prevLen;
   }
 
+  /**
+   * Replaces the AUTO-managed part of the watchlist (top market-cap coins +
+   * most-volatile coins) in one shot, without touching rows the admin added by
+   * hand. Rows carrying one of `autoTags` in `addedBy` are considered managed
+   * by the refresher and are rewritten every run; any manual row that collides
+   * with a new auto symbol is upgraded to the auto row (label refreshed).
+   */
+  public async syncAutoSymbols(
+    items: Array<{
+      symbol: string;
+      baseAsset: string;
+      quoteAsset: string;
+      label: string;
+      addedBy: string;
+    }>,
+    autoTags: string[]
+  ): Promise<{ added: number; removed: number; total: number }> {
+    const now = new Date().toISOString();
+    const normalized = items.map((it) => ({
+      symbol: it.symbol.trim().toUpperCase(),
+      baseAsset: it.baseAsset.trim().toUpperCase(),
+      quoteAsset: it.quoteAsset.trim().toUpperCase(),
+      label: it.label.trim(),
+      addedBy: it.addedBy,
+    }));
+    const wantedSymbols = new Set(normalized.map((s) => s.symbol));
+
+    // ---- disk mirror ----
+    const kept: ICryptoSymbol[] = [];
+    let removed = 0;
+    for (const s of this.store.symbols) {
+      const isAuto = autoTags.includes(String(s.addedBy || ''));
+      if (isAuto || wantedSymbols.has(s.symbol)) {
+        removed += 1;
+        continue;
+      }
+      kept.push(s);
+    }
+    const newRows: ICryptoSymbol[] = normalized.map((s) => ({
+      _id: generateObjectId(),
+      ...s,
+      createdAt: now,
+    }));
+    this.store.symbols = [...kept, ...newRows];
+    this.saveDiskStore();
+
+    // ---- remote MongoDB ----
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        await CryptoSymbolModel.deleteMany({ addedBy: { $in: autoTags } });
+        if (wantedSymbols.size > 0) {
+          await CryptoSymbolModel.deleteMany({ symbol: { $in: [...wantedSymbols] } });
+        }
+        for (const row of newRows) {
+          await CryptoSymbolModel.updateOne(
+            { symbol: row.symbol },
+            { $setOnInsert: { ...row, _id: row._id } },
+            { upsert: true }
+          );
+        }
+      } catch (err) {
+        console.error('Error syncing auto watchlist symbols to remote MongoDB:', err);
+      }
+    }
+
+    return { added: newRows.length, removed, total: newRows.length };
+  }
+
   // ==========================================================================
   // Telegram Direct Bot Configuration & Messages Operations
   // ==========================================================================
