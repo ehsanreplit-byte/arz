@@ -639,6 +639,17 @@ export const apiClient = {
     });
   },
 
+  async tradeAllWeexSignals(payload: {
+    margin?: number;
+    mode?: 'paper' | 'live';
+    orderType?: 'MARKET' | 'LIMIT';
+  }): Promise<{ ok: boolean; created: number; skipped: number; notes: string[] }> {
+    return requestJson('/api/weex/signals/trade-all', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
   async closeWeexPosition(
     id: string,
     reason?: string
@@ -1119,6 +1130,8 @@ export interface WeexPositionInfo {
 export interface WeexApprovedSignalInfo extends RegisteredSignalInfo {
   alreadyTraded: boolean;
   distanceToEntryPct: number;
+  tradable: boolean;
+  tradeBlockReason: string;
 }
 
 export interface WeexStatsInfo {
