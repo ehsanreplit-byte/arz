@@ -333,6 +333,25 @@ export const WeexPositionModel =
   mongoose.models.WeexPosition ||
   mongoose.model<IWeexPosition & Document>('WeexPosition', WeexPositionSchema);
 
+// ============================================================================
+// Small persistent counters (e.g. total signal evaluations)
+// ============================================================================
+export interface IAppCounter {
+  key: string;
+  value: number;
+  updatedAt: string;
+}
+
+const AppCounterSchema = new Schema<IAppCounter & Document>({
+  key: { type: String, required: true, unique: true, index: true },
+  value: { type: Number, default: 0 },
+  updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
+export const AppCounterModel =
+  mongoose.models.AppCounter ||
+  mongoose.model<IAppCounter & Document>('AppCounter', AppCounterSchema);
+
 const TradeAccountSchema = new Schema<ITradeAccount & Document>({
   userId: { type: String, required: true, unique: true, index: true },
   initialBalance: { type: Number, default: 100 },
@@ -511,6 +530,7 @@ export interface WipeDatabaseResult {
 
 interface PersistentStoreData {
   mongoUri: string;
+  counters?: Record<string, number>;
   users: IAdminUser[];
   symbols: ICryptoSymbol[];
   telegramConfig: ITelegramConfig | null;
@@ -657,6 +677,7 @@ class DatabaseEngine {
 
         const updatedStore: PersistentStoreData = {
           mongoUri: parsed.mongoUri || process.env.MONGODB_URI || '',
+          counters: parsed.counters && typeof parsed.counters === 'object' ? parsed.counters : {},
           users: usersList,
           symbols: Array.isArray(parsed.symbols) ? parsed.symbols : [],
           telegramConfig: parsed.telegramConfig || null,
@@ -693,6 +714,7 @@ class DatabaseEngine {
 
     const initialStore: PersistentStoreData = {
       mongoUri: process.env.MONGODB_URI || '',
+      counters: {},
       users: [
         {
           _id: generateObjectId(),
@@ -1669,17 +1691,18 @@ class DatabaseEngine {
   }
 
   public async addRegisteredSignal(
-    sig: Omit<IRegisteredSignal, '_id' | 'createdAt'> & { createdAt?: string }
+    sig: Omit<IRegisteredSignal, '_id' | 'createdAt'> & { _id?: string; createdAt?: string }
   ): Promise<IRegisteredSignal> {
     const newSig: IRegisteredSignal = {
       ...sig,
-      _id: generateObjectId(),
+      _id: sig._id || generateObjectId(),
       createdAt: sig.createdAt || new Date().toISOString(),
     };
 
     if (this.isMongoConnected && mongoose.connection.readyState === 1) {
       const { _id, ...payload } = newSig;
-      const created = await RegisteredSignalModel.create(payload);
+      // keep the caller-provided id so orders that already reference it match
+      const created = await RegisteredSignalModel.create({ _id, ...payload });
       newSig._id = String(created._id);
     }
 
@@ -1757,6 +1780,47 @@ class DatabaseEngine {
   /** True when the remote MongoDB store is actually usable right now. */
   public isRemoteReady(): boolean {
     return this.isMongoConnected && mongoose.connection.readyState === 1;
+  }
+
+  public newSignalId(): string {
+    return generateObjectId();
+  }
+
+  /** Persistent counter (Mongo + disk mirror, highest value wins). */
+  public async getCounter(key: string): Promise<number> {
+    let value = Number(this.store.counters?.[key] || 0);
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const doc = await AppCounterModel.findOne({ key }).lean();
+        if (doc) value = Math.max(value, Number((doc as any).value || 0));
+      } catch {
+        /* disk value is enough */
+      }
+    }
+    return value;
+  }
+
+  public async incrementCounter(key: string, by = 1): Promise<number> {
+    const inc = Math.max(0, Math.floor(Number(by) || 0));
+    let value = Number(this.store.counters?.[key] || 0) + inc;
+
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const doc: any = await AppCounterModel.findOneAndUpdate(
+          { key },
+          { $inc: { value: inc }, $set: { updatedAt: new Date().toISOString() } },
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
+        ).lean();
+        value = Math.max(value, Number(doc?.value || 0));
+      } catch {
+        /* keep the disk value */
+      }
+    }
+
+    if (!this.store.counters) this.store.counters = {};
+    this.store.counters[key] = value;
+    this.saveDiskStore();
+    return value;
   }
 
   /** IDs of admin users that really exist in the primary store. */
