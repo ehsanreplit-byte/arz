@@ -23,6 +23,7 @@
  */
 
 import { dbRepo, IPosition, IPositionFill, IRegisteredSignal, ITradeAccount } from './models.js';
+import { WeexClient } from './weexClient.js';
 
 const POLL_INTERVAL_MS = Math.max(3000, Number(process.env.TRADE_POLL_INTERVAL_MS || 10000));
 const DEFAULT_LEVERAGE = Math.max(1, Number(process.env.TRADE_LEVERAGE || 5));
@@ -116,22 +117,38 @@ export async function fetchPrices(symbols: string[]): Promise<Record<string, num
     `https://data-api.binance.vision/api/v3/ticker/price?symbols=${query}`,
     `https://api.binance.com/api/v3/ticker/price?symbols=${query}`,
   ];
+  const out: Record<string, number> = {};
   for (const url of endpoints) {
     try {
       const res = await fetch(url);
       if (res.ok) {
         const arr: any = await res.json();
-        const out: Record<string, number> = {};
         for (const t of Array.isArray(arr) ? arr : []) {
           out[String(t.symbol).toUpperCase()] = parseFloat(t.price);
         }
-        if (Object.keys(out).length > 0) return out;
+        if (Object.keys(out).length > 0) break;
       }
     } catch {
       // try the next endpoint
     }
   }
-  return {};
+
+  // ---- WEEX fallback ----
+  // Demo positions can also be opened for WEEX-only symbols. A Binance batch
+  // request fails completely when one symbol is unknown, so fill every missing
+  // price from the WEEX ticker instead.
+  const missing = symbols.filter((s) => !out[String(s).toUpperCase()]);
+  if (missing.length > 0) {
+    try {
+      const tickers = await new WeexClient().ticker24h();
+      for (const t of tickers) {
+        if (t.symbol && t.lastPrice > 0) out[t.symbol] = t.lastPrice;
+      }
+    } catch {
+      /* no WEEX prices either */
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
