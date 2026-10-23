@@ -83,9 +83,19 @@ export interface DatabaseStatusInfo {
   clusterHost: string;
   databaseName: string;
   hasConfiguredUri: boolean;
+  /** env = از متغیر محیطی، panel = از فرم پنل، none = تنظیم نشده */
+  uriSource?: 'env' | 'panel' | 'none';
+  envConfigured?: boolean;
   activeUri: string;
   configuredExternalUri: string;
   lastError: string;
+  lastConnectedAt?: string | null;
+  lastDisconnectAt?: string | null;
+  lastDisconnectReason?: string;
+  lastPingAt?: string | null;
+  lastConnectAttemptAt?: string | null;
+  reconnectCount?: number;
+  disconnectCount?: number;
   collections: {
     users: number;
     symbols: number;
