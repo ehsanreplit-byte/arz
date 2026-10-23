@@ -525,6 +525,120 @@ export const apiClient = {
       method: 'DELETE',
     });
   },
+
+  // WEEX Trade API (ترید WEEX)
+  async getWeexSnapshot(): Promise<WeexSnapshotInfo> {
+    return requestJson<WeexSnapshotInfo>('/api/weex/snapshot');
+  },
+
+  async saveWeexSettings(payload: {
+    mode?: 'paper' | 'live';
+    environment?: 'production' | 'simulation';
+    apiKey?: string;
+    apiSecret?: string;
+    passphrase?: string;
+    clearCredentials?: boolean;
+    leverage?: number;
+    marginPerTradePct?: number;
+    tp1ClosePct?: number;
+    feeRatePct?: number;
+    autoTrade?: boolean;
+    pullbackOnly?: boolean;
+    paperInitialBalance?: number;
+  }): Promise<{ ok: boolean; settings: WeexSettingsInfo }> {
+    return requestJson('/api/weex/settings', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async testWeexConnection(payload: {
+    apiKey?: string;
+    apiSecret?: string;
+    passphrase?: string;
+    environment?: 'production' | 'simulation';
+  }): Promise<WeexConnectionTestResult> {
+    return requestJson<WeexConnectionTestResult>('/api/weex/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getWeexMarket(): Promise<{ source: 'weex' | 'binance'; tickers: WeexTickerInfo[] }> {
+    return requestJson('/api/weex/market');
+  },
+
+  async getWeexApprovedSignals(): Promise<{ signals: WeexApprovedSignalInfo[] }> {
+    return requestJson('/api/weex/signals');
+  },
+
+  async placeWeexOrder(payload: {
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    orderType: 'MARKET' | 'LIMIT';
+    margin?: number;
+    leverage?: number;
+    quantity?: number;
+    limitPrice?: number;
+    stopLoss: number;
+    takeProfit1: number;
+    takeProfit2?: number;
+    signalId?: string;
+    label?: string;
+    note?: string;
+    mode?: 'paper' | 'live';
+  }): Promise<{ ok: boolean; message: string; position: WeexPositionInfo | null }> {
+    return requestJson('/api/weex/order', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async tradeWeexSignal(
+    signalId: string,
+    payload: { margin?: number; mode?: 'paper' | 'live'; orderType?: 'MARKET' | 'LIMIT' }
+  ): Promise<{ ok: boolean; message: string; position: WeexPositionInfo | null }> {
+    return requestJson(`/api/weex/signals/${encodeURIComponent(signalId)}/trade`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async closeWeexPosition(
+    id: string,
+    reason?: string
+  ): Promise<{ ok: boolean; message: string }> {
+    return requestJson(`/api/weex/positions/${encodeURIComponent(id)}/close`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async updateWeexProtection(
+    id: string,
+    payload: { stopLoss?: number; takeProfit1?: number; takeProfit2?: number }
+  ): Promise<{ ok: boolean; message: string; position: WeexPositionInfo | null }> {
+    return requestJson(`/api/weex/positions/${encodeURIComponent(id)}/protection`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteWeexPosition(id: string): Promise<{ ok: boolean }> {
+    return requestJson(`/api/weex/positions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  },
+
+  async clearWeexHistory(): Promise<{ ok: boolean }> {
+    return requestJson('/api/weex/history', { method: 'DELETE' });
+  },
+
+  async resetWeexPaper(): Promise<{ ok: boolean; settings: WeexSettingsInfo }> {
+    return requestJson('/api/weex/reset-paper', { method: 'POST' });
+  },
+
+  async runWeexTick(): Promise<{ ok: boolean; summary: Record<string, number> }> {
+    return requestJson('/api/weex/tick', { method: 'POST' });
+  },
 };
 
 export interface TradeAccountInfo {
@@ -882,6 +996,173 @@ export interface AvalAIConfigInfo {
   lastTestLatencyMs?: number;
   lastTestedAt?: string;
   updatedAt?: string;
+}
+
+// ============================================================================
+// WEEX Trade (ترید WEEX)
+// ============================================================================
+export interface WeexSettingsInfo {
+  mode: 'paper' | 'live';
+  environment: 'production' | 'simulation';
+  hasApiKey: boolean;
+  hasApiSecret: boolean;
+  hasPassphrase: boolean;
+  maskedApiKey: string;
+  leverage: number;
+  marginPerTradePct: number;
+  tp1ClosePct: number;
+  autoTrade: boolean;
+  pullbackOnly: boolean;
+  feeRatePct: number;
+  paperInitialBalance: number;
+  paperBalance: number;
+  lastTestStatus: 'success' | 'error' | 'untested';
+  lastTestMessage: string;
+  lastTestAt?: string;
+  updatedAt: string;
+}
+
+export interface WeexFillInfo {
+  type: 'OPEN' | 'PARTIAL_CLOSE' | 'CLOSE';
+  price: number;
+  quantity: number;
+  pnl: number;
+  fee: number;
+  note: string;
+  at: string;
+}
+
+export interface WeexPositionInfo {
+  _id: string;
+  userId: string;
+  mode: 'paper' | 'live';
+  signalId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  status: 'PENDING' | 'OPEN' | 'CLOSED';
+  orderType: 'MARKET' | 'LIMIT';
+  triggerAbove: boolean;
+  entryTarget: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  quantity: number;
+  remainingQuantity: number;
+  notional: number;
+  margin: number;
+  leverage: number;
+  realizedPnl: number;
+  feePaid: number;
+  tp1Hit: boolean;
+  closeReason: string;
+  signalCycleNumber: number;
+  aiEngineUsed: string;
+  averageScore: number;
+  fills: WeexFillInfo[];
+  exchangeOrderId: string;
+  exchangeTp1OrderId: string;
+  exchangeTp2OrderId: string;
+  exchangeSlOrderId: string;
+  exchangePositionId: string;
+  lastPrice: number;
+  note: string;
+  createdAt: string;
+  openedAt: string | null;
+  closedAt: string | null;
+  updatedAt: string;
+  currentPrice: number;
+  unrealizedPnl: number;
+  unrealizedPnlPct: number;
+  distanceToEntryPct: number;
+  riskRewardRatio: string;
+  isLiveOnExchange: boolean;
+  exchangeUnrealizedPnl: number | null;
+}
+
+export interface WeexApprovedSignalInfo extends RegisteredSignalInfo {
+  alreadyTraded: boolean;
+  distanceToEntryPct: number;
+}
+
+export interface WeexStatsInfo {
+  balance: number;
+  initialBalance: number;
+  equity: number;
+  freeMargin: number;
+  usedMargin: number;
+  unrealizedPnl: number;
+  realizedPnl: number;
+  netPnl: number;
+  openPositions: number;
+  pendingOrders: number;
+  closedTrades: number;
+  winCount: number;
+  lossCount: number;
+  winRate: number;
+  totalFees: number;
+}
+
+export interface WeexTickerInfo {
+  symbol: string;
+  lastPrice: number;
+  priceChangePercent: number;
+  highPrice: number;
+  lowPrice: number;
+  quoteVolume: number;
+  markPrice: number;
+  indexPrice: number;
+}
+
+export interface WeexSnapshotInfo {
+  settings: WeexSettingsInfo;
+  mode: 'paper' | 'live';
+  stats: WeexStatsInfo;
+  positions: WeexPositionInfo[];
+  history: WeexPositionInfo[];
+  approvedSignals: WeexApprovedSignalInfo[];
+  live: {
+    connected: boolean;
+    error: string | null;
+    balances: Array<{
+      asset: string;
+      balance: number;
+      availableBalance: number;
+      unrealizePnl: number;
+    }>;
+    exchangePositions: Array<{
+      symbol: string;
+      side: string;
+      size: number;
+      entryPrice: number;
+      unrealizedPnl: number;
+      leverage: number;
+    }>;
+    accountConfig: { canTrade: boolean; dualSidePosition: boolean } | null;
+  };
+  engine: {
+    isRunning: boolean;
+    pollIntervalMs: number;
+    lastTickAt: string | null;
+    lastError: string | null;
+    priceSource: 'weex' | 'binance' | 'none';
+    lastTickSummary: { filled: number; tp1: number; tp2: number; stopped: number; synced: number };
+  };
+}
+
+export interface WeexConnectionTestResult {
+  ok: boolean;
+  message: string;
+  latencyMs: number;
+  serverTime: number;
+  account: { canTrade: boolean; dualSidePosition: boolean } | null;
+  balances: Array<{
+    asset: string;
+    balance: number;
+    availableBalance: number;
+    unrealizePnl: number;
+  }>;
 }
 
 
