@@ -440,9 +440,11 @@ export function WeexTradePanel() {
       seededRef.current = true;
       setLeverage(String(settings.leverage));
       const defaultMargin =
-        settings.mode === 'live'
-          ? Math.max(10, Math.round((snap?.stats.freeMargin || 100) * (settings.marginPerTradePct / 100)))
-          : Math.max(1, Math.round(settings.paperBalance * (settings.marginPerTradePct / 100)));
+        settings.marginPerTradeUsd > 0
+          ? settings.marginPerTradeUsd
+          : settings.mode === 'live'
+            ? Math.max(1, Math.round((snap?.stats.freeMargin || 100) * (settings.marginPerTradePct / 100)))
+            : Math.max(1, Math.round(settings.paperBalance * (settings.marginPerTradePct / 100)));
       setMargin(String(defaultMargin));
     }
   }, [settings, snap?.stats.freeMargin]);
@@ -754,11 +756,21 @@ export function WeexTradePanel() {
               />
             </label>
             <label className="block">
-              <span className="text-[11px] font-bold text-slate-600">مارجین هر معامله (%)</span>
+              <span className="text-[11px] font-bold text-slate-600">مارجین ثابت هر معامله ($)</span>
               <input
-                value={settings.marginPerTradePct}
-                readOnly
-                className="mt-1 w-full px-2.5 py-2 rounded-lg border border-slate-100 bg-slate-50 text-xs font-mono-tabular text-slate-500"
+                key={`musd-${settings.marginPerTradeUsd}`}
+                defaultValue={settings.marginPerTradeUsd}
+                onBlur={(e) =>
+                  void saveSettings(
+                    { marginPerTradeUsd: toNum(e.target.value) },
+                    'مارجین ثابت هر معامله ذخیره شد.'
+                  )
+                }
+                type="number"
+                min={0}
+                step="1"
+                placeholder="0 = استفاده از درصد"
+                className="mt-1 w-full px-2.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-mono-tabular outline-none focus:border-blue-500"
               />
             </label>
             <label className="block">
@@ -819,7 +831,7 @@ export function WeexTradePanel() {
               فقط ورود پولبک (رد شکست)
             </label>
             <label className="inline-flex items-center gap-2 text-[11px] font-bold text-slate-700">
-              مارجین هر معامله:
+              مارجین درصدی (اگر مبلغ ثابت صفر باشد):
               <input
                 key={`margin-${settings.marginPerTradePct}`}
                 defaultValue={settings.marginPerTradePct}
@@ -830,6 +842,11 @@ export function WeexTradePanel() {
                 className="w-16 px-2 py-1 rounded-lg border border-slate-200 bg-white text-xs font-mono-tabular outline-none focus:border-blue-500"
               />
               %
+              {settings.marginPerTradeUsd > 0 && (
+                <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+                  مبلغ ثابت {settings.marginPerTradeUsd}$ فعال است
+                </span>
+              )}
             </label>
           </div>
 
@@ -1114,7 +1131,9 @@ export function WeexTradePanel() {
               </span>
             )}
             <span className="text-[10px] text-slate-500 leading-relaxed">
-              حجم به‌صورت خودکار از مارجین × اهرم محاسبه و به دقت نماد گرد می‌شود.
+              حجم به‌صورت خودکار از مارجین × اهرم محاسبه و به stepSize نماد گرد می‌شود.
+              مارجین پیش‌فرض از تنظیمات خوانده می‌شود
+              {settings?.marginPerTradeUsd ? ` (${settings.marginPerTradeUsd}$ ثابت)` : ' (درصدی)'}.
             </span>
           </div>
         </div>
