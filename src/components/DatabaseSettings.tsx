@@ -10,8 +10,15 @@ import {
   Download,
   FileText,
   Loader2,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
-import { apiClient, AdminUser, DatabaseStatusInfo } from '../apiclient';
+import {
+  apiClient,
+  AdminUser,
+  DatabaseStatusInfo,
+  WipeDatabaseResultInfo,
+} from '../apiclient';
 
 export function DatabaseSettings() {
   const [status, setStatus] = useState<DatabaseStatusInfo | null>(null);
@@ -22,6 +29,19 @@ export function DatabaseSettings() {
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportFeedback, setReportFeedback] = useState<string | null>(null);
+  const [wipeScopes, setWipeScopes] = useState({
+    signals: true,
+    demo: true,
+    weex: true,
+    telegram: true,
+    symbols: true,
+  });
+  const [includeAdmins, setIncludeAdmins] = useState(false);
+  const [wipeBackup, setWipeBackup] = useState(true);
+  const [wipeConfirm, setWipeConfirm] = useState('');
+  const [wiping, setWiping] = useState(false);
+  const [wipeResult, setWipeResult] = useState<WipeDatabaseResultInfo | null>(null);
+  const [wipeError, setWipeError] = useState<string | null>(null);
 
   const handleDownloadReport = async () => {
     setReportBusy(true);
@@ -57,6 +77,45 @@ export function DatabaseSettings() {
     const t = window.setInterval(() => void fetchStatus(true), 15000);
     return () => window.clearInterval(t);
   }, []);
+
+  const handleWipeDatabase = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setWipeError(null);
+    setWipeResult(null);
+
+    const selected = (Object.keys(wipeScopes) as Array<keyof typeof wipeScopes>).filter(
+      (key) => wipeScopes[key]
+    );
+    if (selected.length === 0) {
+      setWipeError('حداقل یک بخش را برای پاکسازی انتخاب کنید.');
+      return;
+    }
+    if (wipeConfirm.trim().toUpperCase() !== 'DELETE') {
+      setWipeError('برای تأیید، عبارت DELETE را دقیقاً وارد کنید.');
+      return;
+    }
+    const ok = window.confirm(
+      'این عملیات داده‌های انتخاب‌شده را برای همیشه از MongoDB و حافظه موقت سرور پاک می‌کند. ادامه می‌دهید؟'
+    );
+    if (!ok) return;
+
+    setWiping(true);
+    try {
+      const res = await apiClient.wipeDatabase({
+        confirm: 'DELETE',
+        scopes: selected,
+        includeAdmins,
+        backup: wipeBackup,
+      });
+      setWipeResult(res);
+      setWipeConfirm('');
+      await fetchStatus(true);
+    } catch (err: any) {
+      setWipeError(err?.message || 'پاکسازی دیتابیس ناموفق بود.');
+    } finally {
+      setWiping(false);
+    }
+  };
 
   const handleConnectMongo = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -401,6 +460,142 @@ export function DatabaseSettings() {
               ))}
             </tbody>
           </table>
+        </div>
+      </div>
+
+      {/* Danger zone: one-shot database wipe */}
+      <div className="bg-white border-2 border-red-200 rounded-xl overflow-hidden">
+        <div className="px-6 py-4 border-b border-red-200 bg-red-50 flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5 text-red-600" />
+          <div>
+            <h3 className="text-sm font-bold text-red-800">پاکسازی کامل داده‌های دیتابیس (غیرقابل بازگشت)</h3>
+            <p className="text-[11px] text-red-700/80">
+              داده‌های انتخاب‌شده از MongoDB و mirror دیسکی هر دو حذف می‌شوند. حساب ادمین فعلی،
+              رشته اتصال و کلیدهای API حفظ می‌شوند.
+            </p>
+          </div>
+        </div>
+
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {[
+              {
+                id: 'signals' as const,
+                label: 'سیگنال‌های ثبت‌شده',
+                count: status?.collections.registeredSignals || 0,
+              },
+              {
+                id: 'demo' as const,
+                label: 'حساب و معاملات دمو',
+                count:
+                  (status?.collections.demoAccounts || 0) +
+                  (status?.collections.demoPositions || 0),
+              },
+              {
+                id: 'weex' as const,
+                label: 'پوزیشن‌های ترید WEEX',
+                count: status?.collections.weexPositions || 0,
+              },
+              {
+                id: 'telegram' as const,
+                label: 'پیام‌های تلگرام',
+                count: status?.collections.telegramMessages || 0,
+              },
+              {
+                id: 'symbols' as const,
+                label: 'واچ‌لیست ارزها',
+                count: status?.collections.symbols || 0,
+              },
+            ].map((item) => (
+              <label
+                key={item.id}
+                className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100"
+              >
+                <span className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={wipeScopes[item.id]}
+                    onChange={(e) =>
+                      setWipeScopes((prev) => ({ ...prev, [item.id]: e.target.checked }))
+                    }
+                    className="w-4 h-4 accent-red-600"
+                  />
+                  {item.label}
+                </span>
+                <span className="text-[11px] font-mono-tabular font-bold text-slate-500">
+                  {item.count}
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <label className="flex items-start gap-2 text-[11px] font-bold text-red-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={includeAdmins}
+              onChange={(e) => setIncludeAdmins(e.target.checked)}
+              className="w-4 h-4 accent-red-600 mt-0.5"
+            />
+            <span>
+              سایر حساب‌های ادمین هم حذف شوند (حساب فعلی شما حفظ می‌شود)
+            </span>
+          </label>
+
+          <label className="flex items-center gap-2 text-[11px] font-bold text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={wipeBackup}
+              onChange={(e) => setWipeBackup(e.target.checked)}
+              className="w-4 h-4 accent-blue-600"
+            />
+            نسخه پشتیبان (snapshot از mirror سرور) قبل از حذف گرفته شود
+          </label>
+
+          <form onSubmit={handleWipeDatabase} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-7">
+              <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                برای تأیید، عبارت <span className="font-mono-tabular text-red-600">DELETE</span> را وارد کنید
+              </label>
+              <input
+                value={wipeConfirm}
+                onChange={(e) => setWipeConfirm(e.target.value)}
+                dir="ltr"
+                placeholder="DELETE"
+                className="w-full px-4 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:bg-white focus:border-red-500 font-mono-tabular text-left"
+              />
+            </div>
+            <div className="md:col-span-5">
+              <button
+                type="submit"
+                disabled={wiping || wipeConfirm.trim().toUpperCase() !== 'DELETE'}
+                className="w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl transition-colors h-[42px] whitespace-nowrap cursor-pointer flex items-center justify-center gap-2"
+              >
+                {wiping ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                {wiping ? 'در حال پاکسازی...' : 'پاکسازی دائمی داده‌ها'}
+              </button>
+            </div>
+          </form>
+
+          {wipeError && (
+            <div className="p-3 rounded-xl border border-red-200 bg-red-50 text-xs text-red-700 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {wipeError}
+            </div>
+          )}
+          {wipeResult && (
+            <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-xs text-emerald-800 space-y-1">
+              <div className="font-bold flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4" /> {wipeResult.message}
+              </div>
+              <div className="font-mono-tabular text-[11px] text-emerald-700" dir="ltr">
+                mongo: {JSON.stringify(wipeResult.mongoDeleted)}
+              </div>
+              {wipeResult.backupFile && (
+                <div className="text-[11px] text-emerald-700">
+                  نسخه پشتیبان روی سرور: <span className="font-mono-tabular">{wipeResult.backupFile}</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
