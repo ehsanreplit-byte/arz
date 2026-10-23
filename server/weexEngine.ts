@@ -73,6 +73,10 @@ export interface WeexPositionView extends IWeexPosition {
 export interface WeexApprovedSignal extends IRegisteredSignal {
   alreadyTraded: boolean;
   distanceToEntryPct: number;
+  /** false when the signal cannot be converted to an order right now */
+  tradable: boolean;
+  /** Persian reason shown next to the "معامله" button */
+  tradeBlockReason: string;
 }
 
 export interface WeexAccountStats {
@@ -165,10 +169,15 @@ function maskKey(key: string): string {
   return `${key.slice(0, 4)}••••${key.slice(-4)}`;
 }
 
-function fallbackRules(symbol: string, price: number): WeexSymbolRules {
+function fallbackRules(
+  symbol: string,
+  price: number,
+  listed?: boolean
+): WeexSymbolRules {
   const decimals = price >= 1000 ? 2 : price >= 1 ? 3 : price >= 0.01 ? 5 : 8;
   return {
     symbol,
+    listed,
     baseAsset: symbol.replace(/USDT$/, ''),
     quoteAsset: 'USDT',
     pricePrecision: decimals,
@@ -346,7 +355,40 @@ class WeexEngine {
       }
     }
     const price = this.priceCache.get(key) || 0;
-    return this.rulesCache[key] || fallbackRules(key, price);
+    if (this.rulesCache[key]) return this.rulesCache[key];
+    // If exchangeInfo was fetched successfully but the symbol is absent, the
+    // contract does not exist on WEEX (live order would be rejected).
+    const listed = Object.keys(this.rulesCache).length > 0 ? false : undefined;
+    return fallbackRules(key, price, listed);
+  }
+
+  /** Cached exchangeInfo map (one network call, refreshed every 30 minutes). */
+  public async getAllSymbolRules(): Promise<Record<string, WeexSymbolRules>> {
+    const fresh = Date.now() - this.rulesCacheAt < 30 * 60 * 1000;
+    if (!fresh || Object.keys(this.rulesCache).length === 0) {
+      try {
+        const client = new WeexClient();
+        const [rules, enabled] = await Promise.all([
+          client.getSymbolRules(),
+          client.apiTradingSymbols().catch(() => [] as string[]),
+        ]);
+        if (Object.keys(rules).length > 0) {
+          // Some contracts exist in exchangeInfo but are not enabled for API
+          // trading (GTCUSDT returns "Parameter 'symbol' is invalid.").
+          if (enabled.length > 0) {
+            const set = new Set(enabled.map((x) => x.toUpperCase()));
+            for (const key of Object.keys(rules)) {
+              rules[key].listed = set.has(key);
+            }
+          }
+          this.rulesCache = rules;
+          this.rulesCacheAt = Date.now();
+        }
+      } catch {
+        /* keep the previous cache */
+      }
+    }
+    return this.rulesCache;
   }
 
   public async getMarketTickers(): Promise<{ tickers: WeexTicker[]; source: 'weex' | 'binance' }> {
@@ -610,6 +652,13 @@ class WeexEngine {
     }
 
     const rules = await this.getSymbolRules(symbol);
+    if (mode === 'live' && rules.listed === false) {
+      return {
+        ok: false,
+        message: `نماد ${symbol} در صرافی WEEX فهرست نشده است؛ فقط سیگنال‌های قابل معامله در WEEX را انتخاب کنید.`,
+        position: null,
+      };
+    }
     const freeMargin =
       mode === 'paper'
         ? Math.max(0, settings.paperBalance)
@@ -765,6 +814,12 @@ class WeexEngine {
     const clientOrderId = `wx${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
     try {
+      // WEEX accepts native SL/TP triggers directly on the entry order. This is
+      // the reliable path (the separate placeTpSlOrder endpoint rejects some
+      // accounts/environments with "Parameter validation failed").
+      // TP2 is attached as the final target; TP1 is closed partially by the
+      // engine tick using a reduce-only MARKET order.
+      const attachTp = base.takeProfit2 > 0 ? base.takeProfit2 : base.takeProfit1;
       const order = await client.placeOrder({
         symbol: base.symbol,
         side: base.side === 'LONG' ? 'BUY' : 'SELL',
@@ -772,6 +827,18 @@ class WeexEngine {
         type: base.orderType,
         quantity: qtyText,
         newClientOrderId: clientOrderId,
+        ...(base.stopLoss > 0
+          ? {
+              slTriggerPrice: formatToPrecision(base.stopLoss, rules.pricePrecision || 2),
+              SlWorkingType: 'MARK_PRICE' as const,
+            }
+          : {}),
+        ...(attachTp > 0
+          ? {
+              tpTriggerPrice: formatToPrecision(attachTp, rules.pricePrecision || 2),
+              TpWorkingType: 'MARK_PRICE' as const,
+            }
+          : {}),
         ...(isMarket ? {} : { timeInForce: 'GTC' as const, price: priceText }),
       });
 
@@ -816,6 +883,30 @@ class WeexEngine {
           entryPrice = marketPrice;
           openedAt = new Date().toISOString();
           status = 'OPEN';
+        }
+      } else {
+        // A LIMIT order can be accepted and cancelled by the exchange in the
+        // same instant (typically insufficient margin). Never store a phantom
+        // PENDING position in that case.
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        try {
+          const info = await client.getOrder(order.orderId);
+          const filled = toNumber(info.executedQty);
+          const avg = toNumber(info.avgPrice);
+          if (filled > 0) {
+            executedQty = filled;
+            entryPrice = avg > 0 ? avg : base.entryTarget;
+            openedAt = new Date().toISOString();
+            status = 'OPEN';
+          } else if (['CANCELED', 'CANCELLED', 'EXPIRED', 'REJECTED'].includes(info.status)) {
+            return {
+              ok: false,
+              message: `صرافی سفارش را بلافاصله لغو کرد (${info.status}). معمولاً یعنی مارجین آزاد کافی نیست یا حجم/قیمت مجاز نیست.`,
+              position: null,
+            };
+          }
+        } catch {
+          /* keep it as pending if the status cannot be read */
         }
       }
 
@@ -1203,18 +1294,52 @@ class WeexEngine {
       this.approvedCacheAt = now;
     }
 
+    const settings = await dbRepo.getWeexSettings(userId);
     const positions = await dbRepo.getWeexPositions(userId);
+    const active = positions.filter((p) => p.status !== 'CLOSED');
     const tradedSignalIds = new Set(positions.map((p) => p.signalId).filter(Boolean));
+    const activeSymbols = new Set(active.map((p) => p.symbol));
+
     const symbols = this.approvedCache.map((s) => s.symbol);
-    const prices = await this.getPrices(symbols).catch(() => ({} as Record<string, number>));
+    const [prices, rulesMap] = await Promise.all([
+      this.getPrices(symbols).catch(() => ({} as Record<string, number>)),
+      settings.mode === 'live'
+        ? this.getAllSymbolRules().catch(() => ({} as Record<string, WeexSymbolRules>))
+        : Promise.resolve({} as Record<string, WeexSymbolRules>),
+    ]);
+    const rulesAvailable = Object.keys(rulesMap).length > 0;
 
     return this.approvedCache.map((signal) => {
-      const price = prices[signal.symbol] || signal.currentPrice || 0;
+      const price = prices[signal.symbol] || 0;
       const distance =
         price > 0 ? ((signal.entryPrice - price) / price) * 100 : 0;
+      const alreadyTraded = tradedSignalIds.has(signal._id);
+
+      const side: 'LONG' | 'SHORT' =
+        signal.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG';
+      const levelsValid =
+        side === 'LONG'
+          ? signal.stopLoss < signal.entryPrice &&
+            signal.takeProfit1 > signal.entryPrice &&
+            (!signal.takeProfit2 || signal.takeProfit2 > signal.takeProfit1)
+          : signal.stopLoss > signal.entryPrice &&
+            signal.takeProfit1 < signal.entryPrice &&
+            (!signal.takeProfit2 || signal.takeProfit2 < signal.takeProfit1);
+
+      let tradeBlockReason = '';
+      if (alreadyTraded) tradeBlockReason = 'این سیگنال قبلاً به پوزیشن تبدیل شده است.';
+      else if (!price) tradeBlockReason = 'قیمت لحظه‌ای این نماد در دسترس نیست.';
+      else if (activeSymbols.has(signal.symbol)) tradeBlockReason = 'برای این نماد یک پوزیشن فعال دارید.';
+      else if (!levelsValid) tradeBlockReason = 'سطوح ورود / حد ضرر / حد سود با جهت سیگنال هم‌خوان نیست.';
+      else if (settings.mode === 'live' && rulesAvailable && !rulesMap[signal.symbol]) {
+        tradeBlockReason = 'این نماد در صرافی WEEX فهرست نشده است.';
+      }
+
       return {
         ...signal,
-        alreadyTraded: tradedSignalIds.has(signal._id),
+        alreadyTraded,
+        tradable: !tradeBlockReason,
+        tradeBlockReason,
         distanceToEntryPct: Math.round(distance * 100) / 100,
       };
     });
@@ -1245,10 +1370,17 @@ class WeexEngine {
     }
 
     const mode = overrides?.mode || settings.mode;
-    if (settings.pullbackOnly && !isPullback(side, signal.entryPrice, marketPrice)) {
+    const orderType = overrides?.orderType || 'LIMIT';
+    // A LIMIT order at the signal entry naturally waits for the price, so the
+    // pullback filter is only meaningful for immediate MARKET fills.
+    if (
+      orderType === 'MARKET' &&
+      settings.pullbackOnly &&
+      !isPullback(side, signal.entryPrice, marketPrice)
+    ) {
       return {
         ok: false,
-        message: 'این ورود از نوع شکست (Breakout) است و طبق تنظیمات فقط ورود پولبک پذیرفته می‌شود.',
+        message: 'این ورود از نوع شکست (Breakout) است و طبق تنظیمات فقط ورود پولبک با سفارش MARKET پذیرفته می‌شود؛ از سفارش LIMIT استفاده کنید.',
         position: null,
       };
     }
@@ -1256,7 +1388,7 @@ class WeexEngine {
     return this.placeOrder(userId, {
       symbol: signal.symbol,
       side,
-      orderType: overrides?.orderType || 'LIMIT',
+      orderType,
       limitPrice: signal.entryPrice,
       margin: overrides?.margin,
       stopLoss: signal.stopLoss,
@@ -1270,6 +1402,31 @@ class WeexEngine {
       note: `سیگنال تأییدشده #${signal.cycleNumber}`,
       mode,
     });
+  }
+
+  /** Converts every currently tradable approved signal into a pending order. */
+  public async tradeAllSignals(
+    userId: string,
+    overrides?: { margin?: number; mode?: 'paper' | 'live'; orderType?: 'MARKET' | 'LIMIT' }
+  ): Promise<{ created: number; skipped: number; notes: string[] }> {
+    const signals = await this.getApprovedSignals(userId);
+    let created = 0;
+    let skipped = 0;
+    const notes: string[] = [];
+
+    for (const signal of signals) {
+      if (!signal.tradable) {
+        skipped += 1;
+        continue;
+      }
+      const res = await this.tradeSignal(userId, signal._id, overrides);
+      if (res.ok) created += 1;
+      else {
+        skipped += 1;
+        if (res.message) notes.push(`${signal.symbol}: ${res.message}`);
+      }
+    }
+    return { created, skipped, notes };
   }
 
   /**
@@ -1489,8 +1646,42 @@ class WeexEngine {
               if (Object.keys(patch).length > 0) {
                 await dbRepo.updateWeexPosition(pos._id, patch);
               }
-              // TP1 fill detection (position still open but smaller)
-              if (!pos.tp1Hit && exchangePos.size > 0 && exchangePos.size < pos.quantity * 0.99) {
+              // TP1 is not attached to the exchange order (TP2 is), so the
+              // engine closes the configured share with a reduce-only MARKET
+              // order once the price reaches TP1.
+              const tp1Crossed =
+                !pos.tp1Hit &&
+                pos.takeProfit1 > 0 &&
+                pos.takeProfit2 > 0 &&
+                exchangePos.size > 0 &&
+                (pos.side === 'LONG'
+                  ? (prices[pos.symbol] || 0) >= pos.takeProfit1
+                  : (prices[pos.symbol] || 0) <= pos.takeProfit1);
+              if (tp1Crossed) {
+                try {
+                  const rules = await this.getSymbolRules(pos.symbol);
+                  const halfQty = floorToPrecision(
+                    (exchangePos.size * settings.tp1ClosePct) / 100,
+                    rules.quantityPrecision || 0
+                  );
+                  if (halfQty > 0 && halfQty >= (rules.minOrderSize || 0)) {
+                    await client.placeOrder({
+                      symbol: pos.symbol,
+                      side: pos.side === 'LONG' ? 'SELL' : 'BUY',
+                      positionSide: pos.side,
+                      type: 'MARKET',
+                      quantity: formatToPrecision(halfQty, rules.quantityPrecision || 0),
+                      newClientOrderId: `wt1c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+                      reduceOnly: true,
+                    });
+                    await dbRepo.updateWeexPosition(pos._id, { tp1Hit: true });
+                    summary.tp1 += 1;
+                  }
+                } catch (err: any) {
+                  console.warn('[weex] live TP1 partial close failed:', err?.message);
+                }
+              } else if (!pos.tp1Hit && exchangePos.size > 0 && exchangePos.size < pos.quantity * 0.99) {
+                // position already shrank (exchange-side TP1) — just record it
                 await dbRepo.updateWeexPosition(pos._id, { tp1Hit: true });
                 summary.tp1 += 1;
               }
