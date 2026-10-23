@@ -70,7 +70,7 @@ export function DatabaseSettings() {
           type: 'success',
           text:
             res.mode === 'mongodb_remote'
-              ? 'اتصال به سرور خارجی MongoDB با موفقیت برقرار شد و کالکشن‌ها همگام‌سازی شدند.'
+              ? 'اتصال به سرور خارجی MongoDB با موفقیت برقرار شد. برای پایداری پس از هر دیپلوی، همین URI را در Environment با نام MONGODB_URI هم ثبت کنید.'
               : 'موتور ذخیره‌سازی دائمی MongoDB فعال است.',
         });
       } else {
@@ -145,19 +145,37 @@ export function DatabaseSettings() {
                 {status.engineLabel}
               </div>
               {status.isRemoteConnected ? (
-                <div
-                  className="text-[11px] text-emerald-800 font-mono-tabular pt-1 break-all"
-                  dir="ltr"
-                >
-                  {status.clusterHost} / {status.databaseName}
+                <div className="space-y-1">
+                  <div
+                    className="text-[11px] text-emerald-800 font-mono-tabular pt-1 break-all"
+                    dir="ltr"
+                  >
+                    {status.clusterHost} / {status.databaseName}
+                  </div>
+                  {(status.disconnectCount || 0) > 0 && (
+                    <div className="text-[10px] text-emerald-800/80 leading-relaxed">
+                      قطعی‌های ثبت‌شده: {status.disconnectCount} · اتصال مجدد: {status.reconnectCount || 0}
+                      {status.lastDisconnectAt
+                        ? ` · آخرین قطعی: ${new Date(status.lastDisconnectAt).toLocaleTimeString('fa-IR')}`
+                        : ''}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <div className="text-[11px] text-amber-800 pt-1">
-                  {status.lastError
-                    ? `آخرین خطا: ${status.lastError}`
-                    : status.hasConfiguredUri
-                    ? 'رشتهٔ اتصال ثبت شده ولی هنوز برقرار نشده است.'
-                    : 'هنوز رشتهٔ اتصال MongoDB وارد نشده است.'}
+                <div className="space-y-1 text-[11px] text-amber-800 pt-1 leading-relaxed">
+                  <div>
+                    {status.lastError
+                      ? `آخرین خطا: ${status.lastError}`
+                      : status.hasConfiguredUri
+                      ? 'رشتهٔ اتصال ثبت شده ولی هنوز برقرار نشده است.'
+                      : 'هنوز رشتهٔ اتصال MongoDB وارد نشده است.'}
+                  </div>
+                  {status.lastDisconnectReason && (
+                    <div>آخرین قطع اتصال: {status.lastDisconnectReason}</div>
+                  )}
+                  {(status.reconnectCount || 0) > 0 && (
+                    <div>تعداد اتصال مجدد موفق: {status.reconnectCount}</div>
+                  )}
                 </div>
               )}
             </div>
@@ -267,6 +285,28 @@ export function DatabaseSettings() {
           <span className="font-mono-tabular">MONGODB_URI</span> را در کادر زیر وارد نمایید تا Mongoose مستقیماً به آن متصل شود:
         </p>
 
+        {status && (
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="font-bold text-slate-600">منبع رشتهٔ اتصال:</span>
+            {status.uriSource === 'env' ? (
+              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold">
+                متغیر محیطی MONGODB_URI (پایدار)
+              </span>
+            ) : status.uriSource === 'panel' ? (
+              <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-bold">
+                فرم پنل (موقت — با ری‌استارت پاک می‌شود)
+              </span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-bold">
+                تنظیم نشده
+              </span>
+            )}
+            {status.readyState === 2 && (
+              <span className="text-blue-600 font-bold">· در حال اتصال…</span>
+            )}
+          </div>
+        )}
+
         {feedback && (
           <div
             className={`p-3.5 rounded-xl border text-xs flex items-center gap-2 ${
@@ -281,6 +321,18 @@ export function DatabaseSettings() {
               <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
             )}
             <span>{feedback.text}</span>
+          </div>
+        )}
+
+        {status && status.uriSource === 'panel' && !status.envConfigured && (
+          <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-[11px] text-amber-800 leading-relaxed flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+            <span>
+              رشتهٔ اتصال فعلی فقط در فایل موقت همین سرور ذخیره شده است. با هر ری‌استارت،
+              دیپلوی یا خواب رفتن سرویس (مثلاً Render free) پاک می‌شود و اتصال «قطعی» به‌نظر
+              می‌رسد. برای اتصال پایدار، <span className="font-mono-tabular">MONGODB_URI</span> را
+              در بخش Environment سرویس میزبان ثبت کنید.
+            </span>
           </div>
         )}
 
