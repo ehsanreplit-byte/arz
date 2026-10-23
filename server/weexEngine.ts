@@ -1441,16 +1441,15 @@ class WeexEngine {
 
     const mode = overrides?.mode || settings.mode;
     const orderType = overrides?.orderType || 'LIMIT';
-    // A LIMIT order at the signal entry naturally waits for the price, so the
-    // pullback filter is only meaningful for immediate MARKET fills.
-    if (
-      orderType === 'MARKET' &&
-      settings.pullbackOnly &&
-      !isPullback(side, signal.entryPrice, marketPrice)
-    ) {
+    // Keep WEEX aligned with the demo engine and the signals table: when the
+    // "pullback only" setting is on, a breakout signal is rejected by BOTH
+    // engines. (A marketable LIMIT would otherwise fill immediately and make a
+    // rejected signal appear as an open trade.)
+    if (settings.pullbackOnly && !isPullback(side, signal.entryPrice, marketPrice)) {
       return {
         ok: false,
-        message: 'این ورود از نوع شکست (Breakout) است و طبق تنظیمات فقط ورود پولبک با سفارش MARKET پذیرفته می‌شود؛ از سفارش LIMIT استفاده کنید.',
+        message:
+          'این ورود از نوع شکست (Breakout) است و طبق تنظیمات «فقط ورود پولبک» رد شد. برای معامله شکست، گزینه فقط پولبک را خاموش کنید.',
         position: null,
       };
     }
@@ -1513,7 +1512,12 @@ class WeexEngine {
       return { created: 0, note: 'سطح ورود / حد ضرر / حد سود کامل نیست.' };
     }
 
-    const userIds = await dbRepo.getAllWeexUserIds();
+    // Ignore stale/ghost user keys that only exist in the ephemeral disk
+    // mirror — they used to create duplicate paper positions for every signal.
+    const realAdminIds = new Set(await dbRepo.getRealAdminIds());
+    const userIds = (await dbRepo.getAllWeexUserIds()).filter((id) =>
+      realAdminIds.has(String(id))
+    );
     let created = 0;
     const notes: string[] = [];
 
