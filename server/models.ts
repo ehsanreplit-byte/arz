@@ -201,6 +201,8 @@ export interface IWeexSettings {
   passphrase: string;
   leverage: number;
   marginPerTradePct: number;
+  /** fixed margin per trade in USD; 0 = use marginPerTradePct instead */
+  marginPerTradeUsd: number;
   /** % of the position closed at TP1 (rest runs to TP2 / SL) */
   tp1ClosePct: number;
   /** automatically mirror every approved (qualified) signal */
@@ -269,6 +271,7 @@ const WeexSettingsSchema = new Schema<IWeexSettings & Document>({
   passphrase: { type: String, default: '' },
   leverage: { type: Number, default: 5 },
   marginPerTradePct: { type: Number, default: 10 },
+  marginPerTradeUsd: { type: Number, default: 0 },
   tp1ClosePct: { type: Number, default: 50 },
   autoTrade: { type: Boolean, default: true },
   pullbackOnly: { type: Boolean, default: true },
@@ -2253,6 +2256,7 @@ class DatabaseEngine {
       passphrase: process.env.WEEX_API_PASSPHRASE || '',
       leverage: 5,
       marginPerTradePct: 10,
+      marginPerTradeUsd: 0,
       tp1ClosePct: 50,
       autoTrade: true,
       pullbackOnly: true,
