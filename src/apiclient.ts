@@ -453,8 +453,14 @@ export const apiClient = {
     signals: RegisteredSignalInfo[];
     total?: number;
     shown?: number;
+    totalEvaluated?: number;
   }> {
-    return requestJson<{ signals: RegisteredSignalInfo[] }>('/api/signals');
+    return requestJson<{
+      signals: RegisteredSignalInfo[];
+      total?: number;
+      shown?: number;
+      totalEvaluated?: number;
+    }>('/api/signals');
   },
 
   async getSignalsStatus(): Promise<{ status: SignalEngineStatus }> {
@@ -916,6 +922,8 @@ export interface SignalEngineStatus {
   /** qualified signals pushed straight to the trade engine in the last cycle */
   dispatchedLastCycle: number;
   evaluatedLastCycle: number;
+  /** total number of symbol evaluations ever performed */
+  totalEvaluated?: number;
   lastCycleResults: SignalCycleSymbolResult[];
 }
 
