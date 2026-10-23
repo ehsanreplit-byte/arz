@@ -10,6 +10,7 @@ import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
 import { signalEngine } from './server/signalEngine.js';
 import { watchlistRefresher } from './server/watchlistRefresh.js';
+import { weexEngine } from './server/weexEngine.js';
 import {
   tradeEngine,
   fetchPrices,
@@ -125,6 +126,7 @@ async function startServer() {
   signalEngine.initialize();
   tradeEngine.initialize();
   watchlistRefresher.initialize();
+  weexEngine.initialize();
 
   // ==========================================================================
   // 1. Auth Routes (JWT + bcryptjs + MongoDB)
@@ -2863,6 +2865,220 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       res.json({ ok: true, positions: [] });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی پوزیشن‌ها' });
+    }
+  });
+
+  // ==========================================================================
+  // 5E. WEEX Trade (ترید WEEX) — paper + live futures trading
+  // ==========================================================================
+  app.get('/api/weex/snapshot', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      res.json(await weexEngine.getSnapshot(userId));
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن وضعیت ترید WEEX' });
+    }
+  });
+
+  app.get('/api/weex/status', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const settings = await weexEngine.getSettings(userId);
+      res.json({
+        settings: weexEngine.toSafeSettings(settings),
+        engine: weexEngine.getState(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن تنظیمات WEEX' });
+    }
+  });
+
+  app.post('/api/weex/settings', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const body = req.body as Record<string, any>;
+      const settings = await weexEngine.saveSettings(userId, {
+        mode: body.mode,
+        environment: body.environment,
+        apiKey: body.apiKey,
+        apiSecret: body.apiSecret,
+        passphrase: body.passphrase,
+        clearCredentials: Boolean(body.clearCredentials),
+        leverage: body.leverage !== undefined ? Number(body.leverage) : undefined,
+        marginPerTradePct:
+          body.marginPerTradePct !== undefined ? Number(body.marginPerTradePct) : undefined,
+        tp1ClosePct: body.tp1ClosePct !== undefined ? Number(body.tp1ClosePct) : undefined,
+        feeRatePct: body.feeRatePct !== undefined ? Number(body.feeRatePct) : undefined,
+        autoTrade: body.autoTrade !== undefined ? Boolean(body.autoTrade) : undefined,
+        pullbackOnly: body.pullbackOnly !== undefined ? Boolean(body.pullbackOnly) : undefined,
+        paperInitialBalance:
+          body.paperInitialBalance !== undefined ? Number(body.paperInitialBalance) : undefined,
+      });
+      res.json({ ok: true, settings: weexEngine.toSafeSettings(settings) });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'خطا در ذخیره تنظیمات WEEX' });
+    }
+  });
+
+  app.post('/api/weex/test', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const body = req.body as Record<string, any>;
+      const result = await weexEngine.testConnection(userId, {
+        apiKey: body.apiKey,
+        apiSecret: body.apiSecret,
+        passphrase: body.passphrase,
+        environment: body.environment === 'simulation' ? 'simulation' : 'production',
+      });
+      res.json(result);
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || 'تست اتصال WEEX ناموفق بود' });
+    }
+  });
+
+  app.get('/api/weex/market', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const { tickers, source } = await weexEngine.getMarketTickers();
+      const sorted = [...tickers]
+        .sort((a, b) => b.quoteVolume - a.quoteVolume)
+        .slice(0, 200);
+      res.json({ source, tickers: sorted });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن بازار WEEX' });
+    }
+  });
+
+  app.get('/api/weex/signals', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      res.json({ signals: await weexEngine.getApprovedSignals(userId) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن سیگنال‌های تأییدشده' });
+    }
+  });
+
+  app.post('/api/weex/order', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const body = req.body as Record<string, any>;
+      const result = await weexEngine.placeOrder(userId, {
+        symbol: String(body.symbol || '').toUpperCase(),
+        side: body.side === 'SHORT' ? 'SHORT' : 'LONG',
+        orderType: body.orderType === 'LIMIT' ? 'LIMIT' : 'MARKET',
+        margin: body.margin !== undefined ? Number(body.margin) : undefined,
+        leverage: body.leverage !== undefined ? Number(body.leverage) : undefined,
+        quantity: body.quantity !== undefined ? Number(body.quantity) : undefined,
+        limitPrice: body.limitPrice !== undefined ? Number(body.limitPrice) : undefined,
+        stopLoss: Number(body.stopLoss),
+        takeProfit1: Number(body.takeProfit1),
+        takeProfit2: body.takeProfit2 !== undefined ? Number(body.takeProfit2) : undefined,
+        signalId: body.signalId ? String(body.signalId) : undefined,
+        label: body.label ? String(body.label) : undefined,
+        note: body.note ? String(body.note) : undefined,
+        mode: body.mode === 'live' ? 'live' : body.mode === 'paper' ? 'paper' : undefined,
+      });
+      res.status(result.ok ? 200 : 400).json(result);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'خطا در ثبت سفارش WEEX' });
+    }
+  });
+
+  app.post(
+    '/api/weex/signals/:id/trade',
+    authMiddleware,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const userId = await requireUser(req);
+        const body = req.body as Record<string, any>;
+        const result = await weexEngine.tradeSignal(userId, String(req.params.id), {
+          margin: body.margin !== undefined ? Number(body.margin) : undefined,
+          mode: body.mode === 'live' ? 'live' : body.mode === 'paper' ? 'paper' : undefined,
+          orderType: body.orderType === 'MARKET' ? 'MARKET' : 'LIMIT',
+        });
+        res.status(result.ok ? 200 : 400).json(result);
+      } catch (err: any) {
+        res.status(500).json({ ok: false, error: err?.message || 'خطا در معامله سیگنال' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/weex/positions/:id/close',
+    authMiddleware,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const userId = await requireUser(req);
+        const result = await weexEngine.closePosition(
+          userId,
+          String(req.params.id),
+          req.body?.reason ? String(req.body.reason) : undefined
+        );
+        res.status(result.ok ? 200 : 400).json(result);
+      } catch (err: any) {
+        res.status(500).json({ ok: false, message: err?.message || 'خطا در بستن پوزیشن WEEX' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/weex/positions/:id/protection',
+    authMiddleware,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const userId = await requireUser(req);
+        const body = req.body as Record<string, any>;
+        const result = await weexEngine.updateProtection(userId, String(req.params.id), {
+          stopLoss: body.stopLoss !== undefined ? Number(body.stopLoss) : undefined,
+          takeProfit1: body.takeProfit1 !== undefined ? Number(body.takeProfit1) : undefined,
+          takeProfit2: body.takeProfit2 !== undefined ? Number(body.takeProfit2) : undefined,
+        });
+        res.status(result.ok ? 200 : 400).json(result);
+      } catch (err: any) {
+        res.status(500).json({ ok: false, message: err?.message || 'خطا در ویرایش حد ضرر/سود' });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/weex/positions/:id',
+    authMiddleware,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const userId = await requireUser(req);
+        const ok = await weexEngine.deletePosition(userId, String(req.params.id));
+        res.json({ ok });
+      } catch (err: any) {
+        res.status(400).json({ ok: false, error: err?.message || 'خطا در حذف پوزیشن' });
+      }
+    }
+  );
+
+  app.delete('/api/weex/history', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      await weexEngine.clearHistory(userId);
+      res.json({ ok: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی تاریخچه WEEX' });
+    }
+  });
+
+  app.post('/api/weex/reset-paper', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const settings = await weexEngine.resetPaperAccount(userId);
+      res.json({ ok: true, settings: weexEngine.toSafeSettings(settings) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در ریست حساب مجازی WEEX' });
+    }
+  });
+
+  app.post('/api/weex/tick', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const summary = await weexEngine.tick();
+      res.json({ ok: true, summary, engine: weexEngine.getState() });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در اجرای موتور WEEX' });
     }
   });
 
