@@ -1759,6 +1759,19 @@ class DatabaseEngine {
     return this.isMongoConnected && mongoose.connection.readyState === 1;
   }
 
+  /** IDs of admin users that really exist in the primary store. */
+  public async getRealAdminIds(): Promise<string[]> {
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const docs = await AdminUserModel.find({}).select('_id').lean();
+        return docs.map((d: any) => String(d._id)).filter(Boolean);
+      } catch {
+        /* fall back to the disk mirror */
+      }
+    }
+    return (this.store.users || []).map((u) => String(u._id)).filter(Boolean);
+  }
+
   public hasConfiguredUri(): boolean {
     const uri = (this.store.mongoUri || process.env.MONGODB_URI || '').trim();
     return Boolean(uri && uri !== 'MY_MONGODB_URI');
