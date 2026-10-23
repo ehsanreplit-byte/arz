@@ -575,6 +575,7 @@ export const apiClient = {
     clearCredentials?: boolean;
     leverage?: number;
     marginPerTradePct?: number;
+    marginPerTradeUsd?: number;
     tp1ClosePct?: number;
     feeRatePct?: number;
     autoTrade?: boolean;
@@ -1056,6 +1057,8 @@ export interface WeexSettingsInfo {
   maskedApiKey: string;
   leverage: number;
   marginPerTradePct: number;
+  /** fixed margin per trade in USD; 0 = percentage mode */
+  marginPerTradeUsd: number;
   tp1ClosePct: number;
   autoTrade: boolean;
   pullbackOnly: boolean;
