@@ -13,6 +13,7 @@ import {
   AlertCircle,
   Link2,
   BarChart2,
+  CheckCircle2,
 } from 'lucide-react';
 import { apiClient, WatchlistSymbol, WatchlistAutoStatus } from '../apiclient';
 import { CryptoLiveChart } from './CryptoLiveChart';
@@ -29,6 +30,8 @@ export interface LiveTickerData {
   wsLink: string;
   updatedAt: number;
   direction: 'up' | 'down' | 'neutral';
+  /** Where the quote came from — WEEX coins are not listed on Binance. */
+  source?: 'binance' | 'weex';
 }
 
 /**
@@ -133,6 +136,8 @@ export function BinanceMarketPage({
   const [autoStatus, setAutoStatus] = useState<WatchlistAutoStatus | null>(null);
   const [autoRefreshing, setAutoRefreshing] = useState(false);
   const [autoMessage, setAutoMessage] = useState<string | null>(null);
+  const [seedingWeex, setSeedingWeex] = useState(false);
+  const [weexSeedMessage, setWeexSeedMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -218,6 +223,26 @@ export function BinanceMarketPage({
       setError(err?.message || 'خطا در حذف ارز');
     } finally {
       setRemovingSymbol(null);
+    }
+  };
+
+  /** Re-adds the 142 WEEX demo (SUSDT) coins that are missing from the list. */
+  const handleSeedWeexDemo = async () => {
+    setWeexSeedMessage(null);
+    setError(null);
+    setSeedingWeex(true);
+    try {
+      const res = await apiClient.seedWeexDemoWatchlist();
+      onSymbolsChange(res.symbols);
+      setWeexSeedMessage(
+        res.added > 0
+          ? `${res.added} ارز WEEX به لیست اضافه شد (مجموع ${res.totalDemoCoins} ارز دمو).`
+          : `همه ${res.totalDemoCoins} ارز WEEX از قبل در لیست موجود بودند.`
+      );
+    } catch (err: any) {
+      setError(err?.message || 'خطا در افزودن ارزهای WEEX');
+    } finally {
+      setSeedingWeex(false);
     }
   };
 
@@ -397,7 +422,7 @@ export function BinanceMarketPage({
 
       {/* Add New Coin Form + Quick Suggestions */}
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-bold text-slate-900">افزودن ارز جدید به لیست رصد لحظه‌ای</h3>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -406,7 +431,25 @@ export function BinanceMarketPage({
               <span className="font-mono-tabular">TON</span>) را وارد کنید تا بلافاصله به WebSocket بایننس متصل شود.
             </p>
           </div>
+
+          <button
+            type="button"
+            onClick={handleSeedWeexDemo}
+            disabled={seedingWeex}
+            title="افزودن ۱۴۲ ارز قابل ترید در حساب دمو WEEX (SUSDT) که در لیست نیستند"
+            className="shrink-0 inline-flex items-center justify-center gap-1.5 px-3.5 py-2 text-xs font-bold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-xl transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>{seedingWeex ? 'در حال افزودن...' : 'افزودن ۱۴۲ ارز WEEX (SUSDT)'}</span>
+          </button>
         </div>
+
+        {weexSeedMessage && (
+          <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{weexSeedMessage}</span>
+          </div>
+        )}
 
         {error && (
           <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs flex items-center gap-2">
@@ -488,7 +531,7 @@ export function BinanceMarketPage({
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
         <div className="px-4 sm:px-6 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
-            <span>لیست ارزهای فعال در استریم بایننس</span>
+            <span>لیست ارزهای فعال (بایننس + WEEX)</span>
             <span aria-hidden="true">·</span>
             <span className="text-xs font-normal text-slate-500">{symbols.length} نماد فعال</span>
           </div>
@@ -528,7 +571,10 @@ export function BinanceMarketPage({
               <tbody className="divide-y divide-slate-200 text-sm">
                 {filteredSymbols.map((item) => {
                   const ticker = tickers[item.symbol.toUpperCase()];
-                  const wsUrl = `wss://stream.binance.com:9443/ws/${item.symbol.toLowerCase()}@ticker`;
+                  const isWeex = ticker?.source === 'weex';
+                  const wsUrl = isWeex
+                    ? ticker!.wsLink
+                    : `wss://stream.binance.com:9443/ws/${item.symbol.toLowerCase()}@ticker`;
                   const isPositive = ticker ? ticker.rawChangePercent >= 0 : true;
 
                   return (
@@ -543,7 +589,17 @@ export function BinanceMarketPage({
                             {item.baseAsset.slice(0, 4)}
                           </div>
                           <div>
-                            <div className="font-bold text-slate-900 text-xs sm:text-sm">{item.label}</div>
+                            <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-1.5">
+                              <span>{item.label}</span>
+                              {isWeex && (
+                                <span
+                                  title="این ارز روی بایننس لیست نیست؛ قیمت از WEEX خوانده می‌شود"
+                                  className="text-[9px] font-bold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5 leading-none"
+                                >
+                                  WEEX
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[11px] sm:text-xs text-slate-500 font-mono-tabular">
                               {item.baseAsset}/{item.quoteAsset}
                             </div>
