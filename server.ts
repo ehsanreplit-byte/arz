@@ -2966,6 +2966,8 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
         leverage: body.leverage !== undefined ? Number(body.leverage) : undefined,
         marginPerTradePct:
           body.marginPerTradePct !== undefined ? Number(body.marginPerTradePct) : undefined,
+        marginPerTradeUsd:
+          body.marginPerTradeUsd !== undefined ? Number(body.marginPerTradeUsd) : undefined,
         tp1ClosePct: body.tp1ClosePct !== undefined ? Number(body.tp1ClosePct) : undefined,
         feeRatePct: body.feeRatePct !== undefined ? Number(body.feeRatePct) : undefined,
         autoTrade: body.autoTrade !== undefined ? Boolean(body.autoTrade) : undefined,
