@@ -2195,7 +2195,12 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
     try {
       const signals = await dbRepo.getRegisteredSignals();
       const total = await dbRepo.countRegisteredSignals();
-      res.json({ signals, total, shown: signals.length });
+      res.json({
+        signals,
+        total,
+        shown: signals.length,
+        totalEvaluated: signalEngine.getState().totalEvaluated,
+      });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در خواندن سیگنال‌های ثبت‌شده' });
     }
