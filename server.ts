@@ -97,16 +97,29 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
   // Initialize MongoDB connection & Telegram Direct Long Polling Worker
-  await dbRepo.connectMongo();
+  const initialDb = await dbRepo.connectMongo();
+  if (!process.env.MONGODB_URI || process.env.MONGODB_URI === 'MY_MONGODB_URI') {
+    console.warn(
+      '[db] MONGODB_URI is not set in the environment. A URI entered from the panel ' +
+        'lives only in the ephemeral data/ folder and will be lost on the next restart/deploy.'
+    );
+  }
+  if (initialDb.error) {
+    console.warn('[db] initial remote connection failed:', initialDb.error);
+  }
 
   // Atlas can be slow to answer on a cold start, which used to leave the app
   // permanently on the disk mirror. Retry quietly in the background until the
   // remote store is reachable (reads merge both stores, so this is safe).
-  if (!dbRepo.isRemoteReady()) {
+  if (dbRepo.hasConfiguredUri() && !dbRepo.isRemoteReady()) {
+    // Exponential backoff (5s → 60s) instead of hammering Atlas, and stop as
+    // soon as the connection is up. A healthy connection is never torn down by
+    // this loop: connectMongo() reuses it when the URI is unchanged.
     const retry = (attempt: number): void => {
-      const delay = Math.min(30_000 * attempt, 300_000);
+      const delay = Math.min(5000 * Math.pow(2, attempt - 1), 60_000);
       setTimeout(() => {
         void (async () => {
+          if (dbRepo.isRemoteReady()) return;
           try {
             await dbRepo.connectMongo();
             if (dbRepo.isRemoteReady()) {
@@ -116,7 +129,7 @@ async function startServer() {
           } catch {
             /* keep retrying */
           }
-          if (attempt < 20) retry(attempt + 1);
+          if (attempt < 10) retry(attempt + 1);
         })();
       }, delay);
     };
