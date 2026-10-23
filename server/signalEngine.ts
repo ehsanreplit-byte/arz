@@ -967,6 +967,18 @@ class SignalEngine {
             registered += 1;
 
             // ---- DIRECT LINK: hand the qualified signal to the trade engine ----
+            // Mark it as "dispatching" FIRST so the safety-net ticks of both
+            // engines cannot pick the same signal up in parallel.
+            try {
+              await dbRepo.markSignalDispatched(
+                savedSignal._id,
+                false,
+                'در حال ارسال به موتور معاملات...',
+                'DISPATCHING'
+              );
+            } catch {
+              /* non fatal */
+            }
             try {
               const { tradeEngine } = await import('./tradeEngine.js');
               const ingest = await tradeEngine.ingestSignal(savedSignal);
