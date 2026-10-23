@@ -13,6 +13,7 @@
 
 import { computeSingleMethodSignal } from './alBrooksSingle.js';
 import { dbRepo, IRegisteredSignal, ISignalMethodItem } from './models.js';
+import { getBinanceUsdtBases } from './weexWatchlist.js';
 import {
   analyzeAllFiveAlBrooksMethods,
   OhlcvCandle,
@@ -143,9 +144,16 @@ async function fetchKlines(
     'https://data-api.binance.vision/api/v3/klines',
     'https://api.binance.com/api/v3/klines',
   ];
-  for (const base of endpoints) {
+
+  // Coins that only trade on WEEX (no live Binance USDT pair) must skip
+  // Binance: its delisted/BREAK markets still answer with stale candles.
+  const bases = await getBinanceUsdtBases();
+  const base = symbol.toUpperCase().replace(/USDT$/, '');
+  const skipBinance = !!bases && !bases.has(base);
+
+  for (const base0 of skipBinance ? [] : endpoints) {
     try {
-      const url = `${base}?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
+      const url = `${base0}?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(
         interval
       )}&limit=${limit}`;
       const res = await fetch(url);
