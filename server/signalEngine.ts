@@ -91,6 +91,8 @@ export interface SignalEngineState {
   registeredLastCycle: number;
   dispatchedLastCycle: number;
   evaluatedLastCycle: number;
+  /** total number of symbol evaluations ever performed (persistent counter) */
+  totalEvaluated: number;
   lastCycleResults: SignalCycleSymbolResult[];
 }
 
@@ -585,6 +587,7 @@ class SignalEngine {
     registeredLastCycle: 0,
     dispatchedLastCycle: 0,
     evaluatedLastCycle: 0,
+    totalEvaluated: 0,
     lastCycleResults: [],
   };
 
@@ -593,6 +596,12 @@ class SignalEngine {
   }
 
   public initialize(): void {
+    void dbRepo
+      .getCounter('signalEvaluations')
+      .then((value) => {
+        this.state.totalEvaluated = value;
+      })
+      .catch(() => undefined);
     this.startScheduler();
     if (RUN_ON_BOOT) {
       setTimeout(() => {
@@ -960,63 +969,69 @@ class SignalEngine {
             cycleNumber,
           };
 
-          const savedSignal = await dbRepo.addRegisteredSignal(payload);
-          result.recorded = true;
+          // The signal is only persisted when a real trade was created for it.
+          // Storing every evaluated symbol (qualified or not) was the main
+          // source of database growth (thousands of rows per day).
+          const createdAtIso = new Date().toISOString();
+          const tempSignal: IRegisteredSignal = {
+            ...payload,
+            _id: dbRepo.newSignalId(),
+            createdAt: createdAtIso,
+          };
+
+          let sentToDemo = false;
+          let sentToWeex = false;
+          let tradeStatus = '';
+          let tradeNote = '';
 
           if (isQualified) {
-            registered += 1;
-
             // ---- DIRECT LINK: hand the qualified signal to the trade engine ----
-            // Mark it as "dispatching" FIRST so the safety-net ticks of both
-            // engines cannot pick the same signal up in parallel.
-            try {
-              await dbRepo.markSignalDispatched(
-                savedSignal._id,
-                false,
-                'در حال ارسال به موتور معاملات...',
-                'DISPATCHING'
-              );
-            } catch {
-              /* non fatal */
-            }
             try {
               const { tradeEngine } = await import('./tradeEngine.js');
-              const ingest = await tradeEngine.ingestSignal(savedSignal);
-              // "sent to trade" must mean an order really exists — a rejected
-              // breakout is NOT a hand-off.
-              result.dispatchedToTrade = ingest.created > 0;
-              result.tradeStatus = ingest.code;
-              result.tradeNote = ingest.note;
-              if (ingest.created > 0) dispatched += 1;
+              const ingest = await tradeEngine.ingestSignal(tempSignal);
+              sentToDemo = ingest.created > 0;
+              tradeStatus = ingest.code;
+              tradeNote = ingest.note;
             } catch (linkErr: any) {
-              result.dispatchedToTrade = false;
-              result.tradeNote = linkErr?.message || 'ارسال سیگنال به موتور ترید ناموفق بود.';
-              console.warn('[signals] trade hand-off failed:', result.tradeNote);
+              tradeStatus = 'ERROR';
+              tradeNote = linkErr?.message || 'ارسال سیگنال به موتور ترید ناموفق بود.';
+              console.warn('[signals] trade hand-off failed:', tradeNote);
             }
 
             // ---- WEEX auto-trade hand-off (paper or live, per user settings) ----
             try {
               const { weexEngine } = await import('./weexEngine.js');
-              const weexResult = await weexEngine.ingestSignal(savedSignal);
-              if (weexResult.created > 0) {
-                result.tradeNote = `${result.tradeNote || ''} | WEEX: ${weexResult.note}`;
+              const weexResult = await weexEngine.ingestSignal(tempSignal);
+              sentToWeex = weexResult.created > 0;
+              if (sentToWeex) {
+                tradeNote = `${tradeNote ? `${tradeNote} | ` : ''}WEEX: ${weexResult.note}`;
               }
             } catch (weexErr: any) {
               console.warn('[signals] WEEX hand-off failed:', weexErr?.message || weexErr);
             }
+          }
 
-            // remember the hand-off outcome on the stored signal so the
-            // signals table can show it
-            try {
-              await dbRepo.markSignalDispatched(
-                savedSignal._id,
-                Boolean(result.dispatchedToTrade),
-                result.tradeNote || '',
-                result.tradeStatus || ''
-              );
-            } catch {
-              // non fatal
-            }
+          const dispatchedNow = isQualified && (sentToDemo || sentToWeex);
+          result.dispatchedToTrade = dispatchedNow;
+          result.tradeStatus = tradeStatus || (sentToWeex ? 'WEEX_CREATED' : '');
+          result.tradeNote = tradeNote || (isQualified ? 'سفارشی ساخته نشد؛ سیگنال ذخیره نمی‌شود.' : '');
+
+          if (dispatchedNow) {
+            result.recorded = true;
+            result.tradeNote = tradeNote;
+            await dbRepo.addRegisteredSignal({
+              ...payload,
+              _id: tempSignal._id,
+              createdAt: createdAtIso,
+              dispatchedToTrade: true,
+              tradeStatus: result.tradeStatus || 'CREATED',
+              tradeDispatchNote: result.tradeNote || '',
+              tradeDispatchedAt: createdAtIso,
+            });
+            registered += 1;
+            dispatched += 1;
+          } else {
+            result.recorded = false;
           }
 
           evaluated += 1;
@@ -1030,6 +1045,20 @@ class SignalEngine {
       }
 
       const durationMs = Date.now() - startedAt;
+
+      // Persistent evaluation counter: "checked coins" is the number of
+      // analyses performed, not the number of rows stored in the DB.
+      if (evaluated > 0) {
+        try {
+          this.state.totalEvaluated = await dbRepo.incrementCounter(
+            'signalEvaluations',
+            evaluated
+          );
+        } catch {
+          this.state.totalEvaluated += evaluated;
+        }
+      }
+
       this.state.registeredLastCycle = registered;
       this.state.dispatchedLastCycle = dispatched;
       this.state.evaluatedLastCycle = evaluated;
