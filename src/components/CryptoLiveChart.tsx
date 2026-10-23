@@ -186,6 +186,23 @@ export function CryptoLiveChart({
         // try next endpoint
       }
     }
+
+    // WEEX-only coins have no Binance pair — ask the server (it falls back to WEEX).
+    try {
+      const res = await apiClient.getMarketKlines(sym, tf, limit);
+      if (Array.isArray(res.candles) && res.candles.length >= 30) {
+        return res.candles.slice(-limit).map((k: any) => ({
+          time: Number(k[0]),
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          volume: parseFloat(k[5]),
+        }));
+      }
+    } catch {
+      /* no fallback data */
+    }
     return [];
   };
 
@@ -267,6 +284,20 @@ export function CryptoLiveChart({
           }
         } catch {
           // try next endpoint
+        }
+      }
+
+      if (cancelled) return;
+
+      if (!fetched) {
+        // WEEX-only coin: fetch through the server proxy (Binance → WEEX).
+        try {
+          const proxied = await apiClient.getMarketKlines(activeSymbol, interval, candleLimit);
+          if (Array.isArray(proxied.candles) && proxied.candles.length > 0) {
+            fetched = proxied.candles;
+          }
+        } catch {
+          /* stay empty */
         }
       }
 
