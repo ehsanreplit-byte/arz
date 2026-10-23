@@ -21,6 +21,12 @@ services:
         sync: false
       - key: AVALAI_BASE_URL
         value: https://api.avalai.ir/v1
+      - key: WEEX_API_KEY
+        sync: false
+      - key: WEEX_API_SECRET
+        sync: false
+      - key: WEEX_API_PASSPHRASE
+        sync: false
       - key: GEMINI_API_KEY
         sync: false
       - key: SIGNAL_REQUEST_GAP_MS
