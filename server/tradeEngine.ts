@@ -233,6 +233,15 @@ class TradeEngine {
     } catch {
       /* ignore */
     }
+    // Drop stale keys that only survive in the ephemeral disk mirror.
+    try {
+      const realAdminIds = new Set(await dbRepo.getRealAdminIds());
+      for (const id of [...ids]) {
+        if (!realAdminIds.has(String(id))) ids.delete(id);
+      }
+    } catch {
+      /* keep the previous list */
+    }
     this.state.knownUserIds = [...ids];
     return this.state.knownUserIds;
   }
@@ -406,7 +415,13 @@ class TradeEngine {
         // written before tradeStatus existed)
         if (s.tradeStatus || s.tradeDispatchedAt) return false;
         if (!s.entryPrice || !s.stopLoss || !s.takeProfit1 || !s.takeProfit2) return false;
-        return now - new Date(s.createdAt).getTime() <= SIGNAL_MAX_AGE_MS;
+        const age = now - new Date(s.createdAt).getTime();
+        // Give the direct hand-off (which applies the pullback filter and may
+        // need tens of seconds for the WEEX leg) time to finish first. Without
+        // this delay the safety-net tick opened positions for signals that the
+        // hand-off rejected a moment later as breakouts.
+        if (age < 120_000) return false;
+        return age <= SIGNAL_MAX_AGE_MS;
       });
 
       // 3. one price snapshot for everything we care about
