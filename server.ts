@@ -555,6 +555,52 @@ async function startServer() {
     }
   });
 
+  // --------------------------------------------------------------------------
+  // Danger zone: one-shot wipe of the application data (both stores)
+  // --------------------------------------------------------------------------
+  app.post('/api/db/wipe', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const body = req.body as {
+        confirm?: string;
+        scopes?: string[];
+        includeAdmins?: boolean;
+        backup?: boolean;
+      };
+
+      // Hard confirmation is enforced server-side too — not just in the UI.
+      if (String(body.confirm || '').trim().toUpperCase() !== 'DELETE') {
+        res.status(400).json({
+          ok: false,
+          error: 'برای پاکسازی باید عبارت DELETE را دقیقاً وارد کنید.',
+        });
+        return;
+      }
+
+      const validScopes = Array.isArray(body.scopes)
+        ? body.scopes.filter((s): s is 'signals' | 'demo' | 'weex' | 'telegram' | 'symbols' =>
+            ['signals', 'demo', 'weex', 'telegram', 'symbols'].includes(s)
+          )
+        : undefined;
+
+      if (body.scopes !== undefined && (!validScopes || validScopes.length === 0)) {
+        res.status(400).json({ ok: false, error: 'حداقل یک بخش برای پاکسازی انتخاب کنید.' });
+        return;
+      }
+
+      const result = await dbRepo.wipeDatabase({
+        scopes: validScopes && validScopes.length > 0 ? validScopes : undefined,
+        includeAdmins: Boolean(body.includeAdmins),
+        keepAdminEmail: req.user?.email,
+        backup: body.backup !== false,
+      });
+
+      console.warn('[db] DATABASE WIPE by', req.user?.email || req.user?.id, result.mongoDeleted);
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'خطا در پاکسازی دیتابیس' });
+    }
+  });
+
   // ==========================================================================
   // 5. AvalAI (ChatGPT - https://docs.avalai.ir/fa/) Routes
   // ==========================================================================
