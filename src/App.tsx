@@ -71,6 +71,12 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [endpointIdx, setEndpointIdx] = useState(0);
   const [wsRetryCount, setWsRetryCount] = useState(0);
+  /**
+   * Bases that actually have a Binance USDT spot pair. WEEX-only coins must be
+   * kept out of the combined stream: an invalid stream name closes the whole
+   * websocket. `null` = not loaded yet (fall back to the old behaviour).
+   */
+  const [binanceBases, setBinanceBases] = useState<Set<string> | null>(null);
 
   // Telegram Summary State for Dashboard & Badge
   const [tgConfig, setTgConfig] = useState<TelegramBotStatusConfig | null>(null);
@@ -114,6 +120,16 @@ export default function App() {
         setSymbols(watchlistRes.symbols);
         setTgConfig(tgStatusRes.config);
         setTgMessages(tgMsgRes.messages);
+
+        // Which bases can be streamed from Binance (WEEX-only coins are priced
+        // separately below). Failure is non-fatal: the panel keeps working with
+        // the previous/all-symbol behaviour.
+        try {
+          const basesRes = await apiClient.getBinanceBases();
+          if (basesRes.bases.length > 0) setBinanceBases(new Set(basesRes.bases));
+        } catch {
+          /* ignore — keep null */
+        }
       } catch (err) {
         console.error('Error loading dashboard data:', err);
       }
@@ -144,8 +160,15 @@ export default function App() {
     }
 
     const streamNames = symbols
+      .filter((s) => !binanceBases || binanceBases.has(String(s.baseAsset || '').toUpperCase()))
       .map((s) => `${s.symbol.toLowerCase()}@ticker`)
       .join('/');
+
+    if (!streamNames) {
+      setWsConnected(false);
+      return;
+    }
+
     const baseUrl = WS_ENDPOINTS[endpointIdx % WS_ENDPOINTS.length];
     const fullWsUrl = `${baseUrl}${streamNames}`;
 
@@ -200,6 +223,7 @@ export default function App() {
             wsLink: `wss://stream.binance.com:9443/ws/${symUpper.toLowerCase()}@ticker`,
             updatedAt: Date.now(),
             direction,
+            source: 'binance',
           },
         }));
       } catch {
@@ -219,7 +243,76 @@ export default function App() {
     return () => {
       ws.close();
     };
-  }, [user, symbols, endpointIdx, wsRetryCount]);
+  }, [user, symbols, endpointIdx, wsRetryCount, binanceBases]);
+
+  // 4. WEEX price feed for the watchlist coins that Binance does not list.
+  //    (The 142 WEEX demo / SUSDT coins are added to the watchlist, but only
+  //    the Binance-listed ones can be streamed from Binance.)
+  useEffect(() => {
+    if (!user || symbols.length === 0) return;
+
+    const weexSymbols = symbols.filter(
+      (s) => binanceBases && !binanceBases.has(String(s.baseAsset || '').toUpperCase())
+    );
+    if (weexSymbols.length === 0) return;
+
+    let cancelled = false;
+
+    const formatNum = (num: number) =>
+      num.toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: num < 1 ? 6 : 2,
+      });
+
+    const load = async () => {
+      try {
+        const res = await apiClient.getWeexWatchlistTickers();
+        if (cancelled) return;
+
+        setTickers((prev) => {
+          const next = { ...prev };
+          for (const item of weexSymbols) {
+            const symUpper = item.symbol.toUpperCase();
+            const row = res.tickers[symUpper];
+            if (!row || !row.price) continue;
+
+            const prevPrice = prevPricesRef.current[symUpper];
+            let direction: 'up' | 'down' | 'neutral' = 'neutral';
+            if (prevPrice !== undefined && row.price !== prevPrice) {
+              direction = row.price > prevPrice ? 'up' : 'down';
+            }
+            prevPricesRef.current[symUpper] = row.price;
+
+            next[symUpper] = {
+              symbol: symUpper,
+              price: formatNum(row.price),
+              rawPrice: row.price,
+              changePercent: row.changePercent.toFixed(2),
+              rawChangePercent: row.changePercent,
+              high24h: formatNum(row.high),
+              low24h: formatNum(row.low),
+              volumeUsdt: formatNum(row.quoteVolume),
+              wsLink: `https://www.weex.com/futures/${item.baseAsset}-USDT`,
+              updatedAt: Date.now(),
+              direction,
+              source: 'weex',
+            };
+          }
+          return next;
+        });
+      } catch {
+        /* keep the previous snapshot */
+      }
+    };
+
+    void load();
+    const timer = setInterval(() => void load(), 12_000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [user, symbols, binanceBases]);
 
   const handleLogout = () => {
     tokenStorage.clearToken();
