@@ -74,6 +74,16 @@ export interface TelegramChatMessage {
   createdAt: string;
 }
 
+export interface WipeDatabaseResultInfo {
+  ok: boolean;
+  backupFile: string;
+  scopes: string[];
+  mongoDeleted: Record<string, number>;
+  diskCleared: Record<string, number>;
+  adminDeleted: number;
+  message: string;
+}
+
 export interface DatabaseStatusInfo {
   isRemoteConnected: boolean;
   readyState: number;
@@ -102,6 +112,9 @@ export interface DatabaseStatusInfo {
     telegramMessages: number;
     telegramBotConfigured: boolean;
     registeredSignals?: number;
+    demoAccounts?: number;
+    demoPositions?: number;
+    weexPositions?: number;
   };
 }
 
@@ -271,6 +284,18 @@ export const apiClient = {
   // MongoDB Database Management API
   async getDatabaseStatus(): Promise<{ status: DatabaseStatusInfo; users: AdminUser[] }> {
     return requestJson('/api/db/status');
+  },
+
+  async wipeDatabase(payload: {
+    confirm: string;
+    scopes?: Array<'signals' | 'demo' | 'weex' | 'telegram' | 'symbols'>;
+    includeAdmins?: boolean;
+    backup?: boolean;
+  }): Promise<WipeDatabaseResultInfo> {
+    return requestJson<WipeDatabaseResultInfo>('/api/db/wipe', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
   async connectDatabase(mongoUri: string): Promise<{
