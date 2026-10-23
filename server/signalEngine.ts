@@ -982,6 +982,17 @@ class SignalEngine {
               console.warn('[signals] trade hand-off failed:', result.tradeNote);
             }
 
+            // ---- WEEX auto-trade hand-off (paper or live, per user settings) ----
+            try {
+              const { weexEngine } = await import('./weexEngine.js');
+              const weexResult = await weexEngine.ingestSignal(savedSignal);
+              if (weexResult.created > 0) {
+                result.tradeNote = `${result.tradeNote || ''} | WEEX: ${weexResult.note}`;
+              }
+            } catch (weexErr: any) {
+              console.warn('[signals] WEEX hand-off failed:', weexErr?.message || weexErr);
+            }
+
             // remember the hand-off outcome on the stored signal so the
             // signals table can show it
             try {
