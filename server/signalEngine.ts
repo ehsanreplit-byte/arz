@@ -166,6 +166,33 @@ async function fetchKlines(
       // try the next endpoint
     }
   }
+
+  // ---- WEEX fallback (symbols listed on WEEX but not on Binance) ----
+  try {
+    const url = `https://api-contract.weex.com/capi/v3/market/klines?symbol=${encodeURIComponent(
+      symbol
+    )}&interval=${encodeURIComponent(interval)}&limit=${Math.min(1000, Math.max(limit, 100))}`;
+    const res = await fetch(url);
+    if (res.ok) {
+      const arr = await res.json();
+      if (Array.isArray(arr) && arr.length >= 30) {
+        const candles = arr.map((k: any) => ({
+          time: Number(k[0]),
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          volume: parseFloat(k[5]),
+        }));
+        // WEEX is not guaranteed to be chronological — normalise it.
+        candles.sort((a, b) => a.time - b.time);
+        return candles;
+      }
+    }
+  } catch {
+    /* no WEEX candles either */
+  }
+
   return [];
 }
 
