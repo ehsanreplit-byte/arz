@@ -545,6 +545,57 @@ export class WeexClient {
     return Array.isArray(data) ? data : data ? [data] : [];
   }
 
+  public async symbolConfigOne(symbol: string): Promise<{
+    symbol: string;
+    marginType: 'CROSSED' | 'ISOLATED';
+    crossLeverage: number;
+    isolatedLongLeverage: number;
+    isolatedShortLeverage: number;
+  } | null> {
+    const rows: any[] = (await this.symbolConfig(symbol)) as any[];
+    const row =
+      rows.find((r) => String(r?.symbol || '').toUpperCase() === symbol.toUpperCase()) || rows[0];
+    if (!row) return null;
+    return {
+      symbol: String(row.symbol || symbol).toUpperCase(),
+      marginType: String(row.marginType || 'CROSSED').toUpperCase() === 'ISOLATED'
+        ? 'ISOLATED'
+        : 'CROSSED',
+      crossLeverage: toNumber(row.crossLeverage),
+      isolatedLongLeverage: toNumber(row.isolatedLongLeverage),
+      isolatedShortLeverage: toNumber(row.isolatedShortLeverage),
+    };
+  }
+
+  /**
+   * Sets the contract leverage for one symbol before an order is placed.
+   *
+   * The engine used to skip this step, so WEEX kept whatever leverage the
+   * account had (often 20x) even though the panel was configured for 10x.
+   */
+  public async setLeverage(
+    symbol: string,
+    leverage: number
+  ): Promise<{ success: boolean; marginType: 'CROSSED' | 'ISOLATED'; leverage: number }> {
+    const lev = Math.max(1, Math.round(Number(leverage) || 1));
+    const cfg = await this.symbolConfigOne(symbol);
+    const marginType: 'CROSSED' | 'ISOLATED' = cfg?.marginType === 'ISOLATED' ? 'ISOLATED' : 'CROSSED';
+    const body: Record<string, unknown> =
+      marginType === 'CROSSED'
+        ? { symbol, marginType, crossLeverage: String(lev) }
+        : {
+            symbol,
+            marginType,
+            isolatedLongLeverage: String(lev),
+            isolatedShortLeverage: String(lev),
+          };
+    const data: any = await this.request('POST', '/capi/v3/account/leverage', {
+      auth: true,
+      body,
+    });
+    return { success: data?.success !== false, marginType, leverage: lev };
+  }
+
   public async commissionRate(
     symbol: string
   ): Promise<{ maker: number; taker: number; apiMaker: number; apiTaker: number }> {
