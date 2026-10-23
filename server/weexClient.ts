@@ -50,6 +50,8 @@ export class WeexApiError extends Error {
 
 export interface WeexSymbolRules {
   symbol: string;
+  /** true when the symbol really exists in WEEX exchangeInfo (live orders need it) */
+  listed?: boolean;
   baseAsset: string;
   quoteAsset: string;
   pricePrecision: number;
@@ -111,6 +113,8 @@ export interface PlaceOrderInput {
   price?: string;
   tpTriggerPrice?: string;
   slTriggerPrice?: string;
+  TpWorkingType?: 'CONTRACT_PRICE' | 'MARK_PRICE';
+  SlWorkingType?: 'CONTRACT_PRICE' | 'MARK_PRICE';
   reduceOnly?: boolean;
 }
 
@@ -171,16 +175,38 @@ export function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-/** Rounds DOWN to a precision so an order never exceeds the requested size. */
+/**
+ * Rounds DOWN to the contract step so an order never exceeds the requested size.
+ *
+ * WEEX uses NEGATIVE `quantityPrecision` for contracts whose size is a multiple
+ * of 10/100 (e.g. XLMUSDT: quantityPrecision = -2 → step 100). Clamping the
+ * precision to 0 produced sizes like 63382 and the exchange rejected them with
+ * "must match the stepSize '100' requirement".
+ */
+export function contractStep(precision: number): number {
+  const p = Math.trunc(precision);
+  return Math.pow(10, -p);
+}
+
 export function floorToPrecision(value: number, precision: number): number {
-  const p = Math.max(0, Math.min(12, Math.trunc(precision)));
-  const factor = Math.pow(10, p);
-  return Math.floor(value * factor + 1e-9) / factor;
+  const step = contractStep(precision);
+  const rounded = Math.floor(value / step + 1e-9) * step;
+  return Math.round(rounded * 1e8) / 1e8;
 }
 
 export function formatToPrecision(value: number, precision: number): string {
   const p = Math.max(0, Math.min(12, Math.trunc(precision)));
-  return floorToPrecision(value, p).toFixed(p);
+  return floorToPrecision(value, precision).toFixed(p);
+}
+
+/**
+ * JSON.parse loses precision for 18-digit order ids (they exceed
+ * Number.MAX_SAFE_INTEGER), which made cancel/query calls hit the wrong id.
+ * Quote long integers before parsing so they stay exact strings.
+ */
+function parseJsonPreservingBigInts(text: string): unknown {
+  const safe = text.replace(/([:\[,]\s*)(\d{16,})(?=\s*[,}\]])/g, '$1"$2"');
+  return JSON.parse(safe);
 }
 
 function toBase64(buffer: ArrayBuffer): string {
@@ -331,7 +357,7 @@ export class WeexClient {
     const text = await response.text();
     let parsed: unknown = text;
     try {
-      parsed = text ? JSON.parse(text) : {};
+      parsed = text ? parseJsonPreservingBigInts(text) : {};
     } catch {
       /* keep the raw text */
     }
@@ -462,6 +488,7 @@ export class WeexClient {
       if (!symbol) continue;
       out[symbol] = {
         symbol,
+        listed: true,
         baseAsset: String(s.baseAsset || ''),
         quoteAsset: String(s.quoteAsset || 'USDT'),
         pricePrecision: toNumber(s.pricePrecision, 2),
