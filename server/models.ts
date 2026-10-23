@@ -528,9 +528,75 @@ class DatabaseEngine {
   private rekeyAttempted = new Set<string>();
   private lastConnectionError = '';
   private activeUri = '';
+  /** true while THIS process intentionally closes the connection */
+  private manualDisconnect = false;
+  /** serializes every connect attempt so two callers can never fight over the driver */
+  private connectChain: Promise<unknown> = Promise.resolve();
+  private lastConnectedAt: string | null = null;
+  private lastDisconnectAt: string | null = null;
+  private lastDisconnectReason = '';
+  private lastPingAt: string | null = null;
+  private lastConnectAttemptAt: number = 0;
+  private reconnectCount = 0;
+  private disconnectCount = 0;
+  private listenersBound = false;
 
   constructor() {
     this.store = this.loadDiskStore();
+    this.bindMongoEvents();
+  }
+
+  /**
+   * Mongoose reports drops/reconnects through connection events. Without these
+   * listeners `isMongoConnected` stayed true after a drop (and false after an
+   * automatic recovery), so the panel reported a stale state and no Redis-style
+   * retry was ever triggered.
+   */
+  private bindMongoEvents(): void {
+    if (this.listenersBound) return;
+    this.listenersBound = true;
+    const conn = mongoose.connection;
+
+    conn.on('connected', () => {
+      this.isMongoConnected = true;
+      this.lastConnectionError = '';
+      this.lastConnectedAt = new Date().toISOString();
+      console.log('[db] MongoDB connected.');
+    });
+
+    conn.on('disconnected', () => {
+      const wasConnected = this.isMongoConnected;
+      this.isMongoConnected = false;
+      if (!this.manualDisconnect && wasConnected) {
+        this.disconnectCount += 1;
+        this.lastDisconnectAt = new Date().toISOString();
+        this.lastDisconnectReason = 'ارتباط با سرور MongoDB قطع شد (شبکه یا سرور)';
+        console.warn('[db] MongoDB disconnected — waiting for the driver to reconnect.');
+      }
+    });
+
+    conn.on('reconnected', () => {
+      this.isMongoConnected = true;
+      this.lastConnectionError = '';
+      this.reconnectCount += 1;
+      this.lastConnectedAt = new Date().toISOString();
+      console.log('[db] MongoDB reconnected.');
+    });
+
+    conn.on('error', (err: any) => {
+      // Keep the actionable message produced by connectMongo(); the driver's
+      // raw error event arrives afterwards and used to overwrite it.
+      if (this.manualDisconnect) return;
+      this.lastConnectionError = this.explainMongoError(err);
+      console.error('[db] MongoDB connection error:', this.lastConnectionError);
+    });
+
+    conn.on('close', () => {
+      if (!this.manualDisconnect) {
+        this.isMongoConnected = false;
+        console.warn('[db] MongoDB connection closed.');
+      }
+    });
   }
 
   private loadDiskStore(): PersistentStoreData {
@@ -661,42 +727,114 @@ class DatabaseEngine {
     }
   }
 
-  public async connectMongo(customUri?: string): Promise<{
+  /**
+   * Public entry point. Every call is serialized through `connectChain`, so the
+   * boot retry, a manual panel save and an auto-recovery can never disconnect
+   * each other's working connection (which is what made the panel flap between
+   * "connected" and "disconnected").
+   */
+  public connectMongo(customUri?: string): Promise<{
     connected: boolean;
     mode: 'mongodb_remote' | 'mongodb_local_engine';
     uri: string;
     error?: string;
   }> {
-    const targetUri = (customUri !== undefined ? customUri : this.store.mongoUri || process.env.MONGODB_URI || '').trim();
+    const run = () => this.connectMongoInternal(customUri);
+    const next = this.connectChain.then(run, run);
+    // keep the chain alive even when one attempt rejects
+    this.connectChain = next.then(
+      () => undefined,
+      () => undefined
+    );
+    return next;
+  }
+
+  private async connectMongoInternal(customUri?: string): Promise<{
+    connected: boolean;
+    mode: 'mongodb_remote' | 'mongodb_local_engine';
+    uri: string;
+    error?: string;
+  }> {
+    const envUri = (process.env.MONGODB_URI || '').trim();
+    const storedUri = (this.store.mongoUri || '').trim();
+    let targetUri = (customUri !== undefined ? String(customUri) : storedUri || envUri).trim();
+
     if (customUri !== undefined) {
       this.store.mongoUri = targetUri;
       this.saveDiskStore();
     }
 
     if (!targetUri || targetUri === 'MY_MONGODB_URI') {
-      this.isMongoConnected = false;
-      this.activeUri = 'mongodb://local-persistent-engine:27017/crypto_telegram_admin';
+      // An empty panel value must not wipe a working MONGODB_URI env config.
+      if (customUri !== undefined && envUri && envUri !== 'MY_MONGODB_URI') {
+        targetUri = envUri;
+        this.store.mongoUri = envUri;
+        this.saveDiskStore();
+      } else {
+        this.isMongoConnected = false;
+        this.activeUri = 'mongodb://local-persistent-engine:27017/crypto_telegram_admin';
+        return {
+          connected: true,
+          mode: 'mongodb_local_engine',
+          uri: this.activeUri,
+        };
+      }
+    }
+
+    this.lastConnectAttemptAt = Date.now();
+    const uriChanged = Boolean(this.activeUri) && this.activeUri !== targetUri;
+
+    // A healthy connection to the SAME URI is reused instead of being torn down.
+    if (!uriChanged && mongoose.connection.readyState === 1 && this.isMongoConnected) {
       return {
         connected: true,
-        mode: 'mongodb_local_engine',
-        uri: this.activeUri,
+        mode: 'mongodb_remote',
+        uri: this.maskMongoUri(targetUri),
       };
     }
 
-    try {
-      if (mongoose.connection.readyState === 1) {
-        await mongoose.disconnect();
+    // If the driver is already opening THIS uri, just wait for it.
+    if (!uriChanged && mongoose.connection.readyState === 2) {
+      try {
+        await mongoose.connection.asPromise();
+      } catch {
+        /* handled below by the explicit connect */
       }
-      await mongoose.connect(targetUri, {
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 10000,
-      });
+      if ((mongoose.connection.readyState as number) === 1) {
+        this.isMongoConnected = true;
+        this.activeUri = targetUri;
+        return {
+          connected: true,
+          mode: 'mongodb_remote',
+          uri: this.maskMongoUri(targetUri),
+        };
+      }
+    }
+
+    try {
+      if (mongoose.connection.readyState !== 0) {
+        this.manualDisconnect = true;
+        try {
+          await mongoose.disconnect();
+        } finally {
+          this.manualDisconnect = false;
+        }
+      }
+      this.isMongoConnected = false;
+
+      await mongoose.connect(targetUri, this.mongoConnectOptions(targetUri));
       this.isMongoConnected = true;
       this.activeUri = targetUri;
       this.lastConnectionError = '';
+      this.lastConnectedAt = new Date().toISOString();
 
-      // Synchronize initial disk collections to remote MongoDB if remote is empty
-      await this.syncToRemoteMongo();
+      // Synchronize initial disk collections to remote MongoDB if remote is
+      // empty. Never let a slow sync fail (or block) the connect response.
+      try {
+        await this.syncToRemoteMongo();
+      } catch (syncErr: any) {
+        console.warn('[db] initial sync skipped:', syncErr?.message || syncErr);
+      }
 
       return {
         connected: true,
@@ -704,16 +842,151 @@ class DatabaseEngine {
         uri: this.maskMongoUri(targetUri),
       };
     } catch (err: any) {
+      const message = this.explainMongoError(err);
       this.isMongoConnected = false;
-      this.lastConnectionError = err?.message || 'خطا در برقراری ارتباط با سرور خارجی MongoDB';
+      this.lastConnectionError = message;
       this.activeUri = 'mongodb://local-persistent-engine:27017/crypto_telegram_admin';
+      // A rejected connect() can leave the driver half-open; make sure the next
+      // attempt starts from a clean state.
+      try {
+        this.manualDisconnect = true;
+        await mongoose.disconnect();
+      } catch {
+        /* ignore */
+      } finally {
+        this.manualDisconnect = false;
+      }
       return {
         connected: false,
         mode: 'mongodb_local_engine',
         uri: this.maskMongoUri(targetUri),
-        error: this.lastConnectionError,
+        error: message,
       };
     }
+  }
+
+  /** Driver options tuned for cloud hosts (Atlas on Render/Heroku style). */
+  private mongoConnectOptions(uri: string): Record<string, unknown> {
+    const forceIpv4Env = (process.env.MONGODB_IP_FAMILY || '').trim().toLowerCase();
+    // Atlas is reachable over IPv4; forcing it avoids the Node happy-eyeballs
+    // path that intermittently fails on cloud egress (a classic cause of
+    // "connected then dropped" loops). Set MONGODB_IP_FAMILY=auto to disable.
+    const forceIpv4 =
+      forceIpv4Env === 'auto' || forceIpv4Env === '0'
+        ? false
+        : forceIpv4Env === '6'
+          ? false
+          : forceIpv4Env === '4' || uri.startsWith('mongodb+srv://');
+
+    return {
+      serverSelectionTimeoutMS: Math.max(
+        5000,
+        Number(process.env.MONGODB_SERVER_SELECTION_TIMEOUT_MS || 30000)
+      ),
+      connectTimeoutMS: Math.max(
+        5000,
+        Number(process.env.MONGODB_CONNECT_TIMEOUT_MS || 30000)
+      ),
+      socketTimeoutMS: Math.max(
+        20000,
+        Number(process.env.MONGODB_SOCKET_TIMEOUT_MS || 120000)
+      ),
+      // keep NAT/firewall mappings warm — idle sockets are the usual reason a
+      // cloud MongoDB connection silently dies.
+      heartbeatFrequencyMS: 10000,
+      maxPoolSize: Math.max(5, Number(process.env.MONGODB_MAX_POOL_SIZE || 20)),
+      minPoolSize: 1,
+      maxIdleTimeMS: 60000,
+      retryWrites: true,
+      retryReads: true,
+      autoSelectFamily: true,
+      ...(forceIpv4 ? { family: 4 } : {}),
+    };
+  }
+
+  /** Translates driver errors into an actionable Persian message. */
+  private explainMongoError(err: any): string {
+    const raw = String(err?.message || err || 'خطای نامشخص');
+    const lower = raw.toLowerCase();
+    if (lower.includes('authentication failed') || lower.includes('bad auth')) {
+      return `نام کاربری یا رمز MongoDB اشتباه است. اگر رمز شامل @ یا : یا / است، آن را در URI کدگذاری کنید (@ → %40). جزئیات: ${raw}`;
+    }
+    if (lower.includes('querysrv') || lower.includes('enotfound') || lower.includes('eai_again')) {
+      return `آدرس کلاستر MongoDB پیدا نشد (DNS). رشته اتصال و اتصال اینترنت سرور را بررسی کنید. جزئیات: ${raw}`;
+    }
+    if (
+      lower.includes('could not connect') ||
+      lower.includes('serverselection') ||
+      lower.includes('etimedout') ||
+      lower.includes('econnrefused')
+    ) {
+      return `سرور MongoDB به اتصال پاسخ نداد. تقریباً همیشه یعنی IP سرور در Access List آتلاس مجاز نشده است؛ 0.0.0.0/0 را موقتاً اضافه کنید. جزئیات: ${raw}`;
+    }
+    if (lower.includes('cannot call openuri') || lower.includes('active connection')) {
+      return `اتصال قبلی هنوز باز است؛ درخواست متوقف شد تا اتصال فعلی قطع نشود. دوباره تلاش کنید. جزئیات: ${raw}`;
+    }
+    if (lower.includes('tls') || lower.includes('ssl')) {
+      return `خطای TLS در اتصال MongoDB. پورت/گزینه‌های ssl رشته اتصال را بررسی کنید. جزئیات: ${raw}`;
+    }
+    return raw;
+  }
+
+  private uriSource(): 'env' | 'panel' | 'none' {
+    const envUri = (process.env.MONGODB_URI || '').trim();
+    const storedUri = (this.store.mongoUri || '').trim();
+    if (storedUri && storedUri !== envUri) return 'panel';
+    if (envUri && envUri !== 'MY_MONGODB_URI') return 'env';
+    if (storedUri) return 'panel';
+    return 'none';
+  }
+
+  /**
+   * Verifies the live connection (ping) and, when it is really dead, lets one
+   * background reconnect attempt run. Called by the status endpoint so the
+   * panel's "test connection" button reports reality instead of a stale flag.
+   */
+  public async checkConnection(): Promise<{ ok: boolean; error?: string }> {
+    if (!this.isMongoConnected || mongoose.connection.readyState !== 1) {
+      if (mongoose.connection.readyState === 2) {
+        return { ok: false, error: 'در حال برقراری اتصال به MongoDB…' };
+      }
+      this.isMongoConnected = false;
+      this.maybeReconnectInBackground();
+      return { ok: false, error: this.lastConnectionError || 'اتصال MongoDB برقرار نیست.' };
+    }
+
+    try {
+      const db = mongoose.connection.db;
+      if (!db) throw new Error('اتصال MongoDB هنوز آماده نیست.');
+      await Promise.race([
+        db.admin().command({ ping: 1 }),
+        new Promise((_resolve, reject) =>
+          setTimeout(() => reject(new Error('زمان پاسخ سرور MongoDB به پایان رسید')), 5000)
+        ),
+      ]);
+      this.lastPingAt = new Date().toISOString();
+      return { ok: true };
+    } catch (err: any) {
+      this.isMongoConnected = false;
+      this.lastConnectionError = this.explainMongoError(err);
+      this.disconnectCount += 1;
+      this.lastDisconnectAt = new Date().toISOString();
+      this.lastDisconnectReason = 'پاسخ ping از سرور MongoDB دریافت نشد (اتصال مرده)';
+      this.maybeReconnectInBackground();
+      return { ok: false, error: this.lastConnectionError };
+    }
+  }
+
+  /** Throttled, fire-and-forget reconnect (never blocks a status request). */
+  public maybeReconnectInBackground(): void {
+    const uri = (this.store.mongoUri || process.env.MONGODB_URI || '').trim();
+    if (!uri || uri === 'MY_MONGODB_URI') return;
+    if (this.isRemoteReady()) return;
+    if (mongoose.connection.readyState === 2) return;
+    if (Date.now() - this.lastConnectAttemptAt < 20000) return;
+    setTimeout(() => {
+      void this.connectMongo().catch(() => undefined);
+    }, 50);
   }
 
   private maskMongoUri(uri: string): string {
@@ -723,23 +996,51 @@ class DatabaseEngine {
 
   private async syncToRemoteMongo(): Promise<void> {
     if (!this.isMongoConnected) return;
+
+    const chunk = <T,>(rows: T[], size = 1000): T[][] => {
+      const out: T[][] = [];
+      for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
+      return out;
+    };
+
+    const bulkUpsert = async (
+      model: any,
+      rows: any[],
+      filterOf: (row: any) => Record<string, unknown>,
+      label: string
+    ): Promise<void> => {
+      if (rows.length === 0) return;
+      for (const part of chunk(rows)) {
+        try {
+          await model.bulkWrite(
+            part.map((row) => ({
+              updateOne: {
+                filter: filterOf(row),
+                update: { $setOnInsert: row },
+                upsert: true,
+              },
+            })),
+            { ordered: false }
+          );
+        } catch (err: any) {
+          // duplicate-key races are harmless; log anything else and continue
+          if (!/duplicate key/i.test(String(err?.message || ''))) {
+            console.warn(`[db] sync ${label} chunk failed:`, err?.message || err);
+          }
+        }
+      }
+    };
+
     try {
-      const userCount = await AdminUserModel.countDocuments();
-      if (userCount === 0 && this.store.users.length > 0) {
-        for (const u of this.store.users) {
-          await AdminUserModel.updateOne({ email: u.email }, { $setOnInsert: u }, { upsert: true });
-        }
+      if ((await AdminUserModel.countDocuments()) === 0) {
+        await bulkUpsert(AdminUserModel, this.store.users, (u) => ({ email: u.email }), 'users');
       }
 
-      const symbolCount = await CryptoSymbolModel.countDocuments();
-      if (symbolCount === 0 && this.store.symbols.length > 0) {
-        for (const s of this.store.symbols) {
-          await CryptoSymbolModel.updateOne({ symbol: s.symbol }, { $setOnInsert: s }, { upsert: true });
-        }
+      if ((await CryptoSymbolModel.countDocuments()) === 0) {
+        await bulkUpsert(CryptoSymbolModel, this.store.symbols, (s) => ({ symbol: s.symbol }), 'symbols');
       }
 
-      const configCount = await TelegramConfigModel.countDocuments();
-      if (configCount === 0 && this.store.telegramConfig) {
+      if ((await TelegramConfigModel.countDocuments()) === 0 && this.store.telegramConfig) {
         const { _id, ...rest } = this.store.telegramConfig;
         await TelegramConfigModel.create(rest);
       }
@@ -747,62 +1048,44 @@ class DatabaseEngine {
       // Demo trading data must be mirrored too. Without this, everything that
       // was written while MongoDB was still connecting stayed only in the disk
       // mirror and disappeared as soon as reads switched over to MongoDB.
-      const acctCount = await TradeAccountModel.countDocuments();
-      if (acctCount === 0 && Array.isArray(this.store.tradeAccounts)) {
-        for (const a of this.store.tradeAccounts) {
-          // keep the SAME _id as the disk mirror, otherwise the very same row
-          // would come back twice (once per store) from the merged reader
-          await TradeAccountModel.updateOne(
-            { _id: a._id },
-            { $setOnInsert: { ...a, _id: a._id } },
-            { upsert: true }
-          );
-        }
+      if ((await TradeAccountModel.countDocuments()) === 0) {
+        await bulkUpsert(
+          TradeAccountModel,
+          this.store.tradeAccounts || [],
+          (a) => ({ _id: a._id }),
+          'trade accounts'
+        );
       }
 
-      const posCount = await PositionModel.countDocuments();
-      if (posCount === 0 && Array.isArray(this.store.positions)) {
-        for (const p of this.store.positions) {
-          await PositionModel.updateOne(
-            { _id: p._id },
-            { $setOnInsert: { ...p, _id: p._id } },
-            { upsert: true }
-          );
-        }
+      if ((await PositionModel.countDocuments()) === 0) {
+        await bulkUpsert(PositionModel, this.store.positions || [], (p) => ({ _id: p._id }), 'positions');
       }
 
-      const weexCfgCount = await WeexSettingsModel.countDocuments();
-      if (weexCfgCount === 0 && Array.isArray(this.store.weexSettings)) {
-        for (const s of this.store.weexSettings) {
-          await WeexSettingsModel.updateOne(
-            { _id: s._id },
-            { $setOnInsert: { ...s, _id: s._id } },
-            { upsert: true }
-          );
-        }
+      if ((await WeexSettingsModel.countDocuments()) === 0) {
+        await bulkUpsert(
+          WeexSettingsModel,
+          this.store.weexSettings || [],
+          (s) => ({ _id: s._id }),
+          'weex settings'
+        );
       }
 
-      const weexPosCount = await WeexPositionModel.countDocuments();
-      if (weexPosCount === 0 && Array.isArray(this.store.weexPositions)) {
-        for (const p of this.store.weexPositions) {
-          await WeexPositionModel.updateOne(
-            { _id: p._id },
-            { $setOnInsert: { ...p, _id: p._id } },
-            { upsert: true }
-          );
-        }
+      if ((await WeexPositionModel.countDocuments()) === 0) {
+        await bulkUpsert(
+          WeexPositionModel,
+          this.store.weexPositions || [],
+          (p) => ({ _id: p._id }),
+          'weex positions'
+        );
       }
 
-      const sigCount = await RegisteredSignalModel.countDocuments();
-      if (sigCount === 0 && Array.isArray(this.store.registeredSignals)) {
-        for (const s of this.store.registeredSignals) {
-          const { _id, ...rest } = s;
-          await RegisteredSignalModel.updateOne(
-            { _id: s._id },
-            { $setOnInsert: { ...rest, _id: s._id } },
-            { upsert: true }
-          );
-        }
+      if ((await RegisteredSignalModel.countDocuments()) === 0) {
+        await bulkUpsert(
+          RegisteredSignalModel,
+          this.store.registeredSignals || [],
+          (s) => ({ _id: s._id }),
+          'signals'
+        );
       }
     } catch (err) {
       console.error('Error syncing collections to remote MongoDB:', err);
@@ -820,36 +1103,95 @@ class DatabaseEngine {
     }
   }
 
-  public async getDatabaseStatus() {
-    const users = await this.getAllUsers();
-    const symbols = await this.getSymbols();
-    const messages = await this.getTelegramMessages();
-    const tgConfig = await this.getTelegramConfig();
-    const signals = await this.getRegisteredSignals();
+  /**
+   * Collection counts for the status panel.
+   *
+   * The previous version loaded EVERY registered signal and telegram message
+   * just to call `.length`. With tens of thousands of rows — polled every 15
+   * seconds by the panel — that saturated the Atlas pool and made the driver
+   * look "disconnected". `countDocuments` is one cheap command per collection.
+   */
+  private async getCollectionCounts() {
+    const counts = {
+      users: this.store.users.length,
+      symbols: this.store.symbols.length,
+      telegramMessages: this.store.telegramMessages.length,
+      registeredSignals: Array.isArray(this.store.registeredSignals)
+        ? this.store.registeredSignals.length
+        : 0,
+    };
 
-    const remoteReady = this.isMongoConnected && mongoose.connection.readyState === 1;
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const [users, symbols, messages, signals] = await Promise.all([
+          AdminUserModel.countDocuments(),
+          CryptoSymbolModel.countDocuments(),
+          TelegramMessageModel.countDocuments(),
+          RegisteredSignalModel.countDocuments(),
+        ]);
+        counts.users = Math.max(counts.users, users);
+        counts.symbols = Math.max(counts.symbols, symbols);
+        counts.telegramMessages = Math.max(counts.telegramMessages, messages);
+        counts.registeredSignals = Math.max(counts.registeredSignals, signals);
+      } catch (err: any) {
+        this.lastConnectionError = this.explainMongoError(err);
+      }
+    }
+    return counts;
+  }
+
+  public async getDatabaseStatus() {
+    const conn = await this.checkConnection();
+    const tgConfig = await this.getTelegramConfig();
+    const counts = await this.getCollectionCounts();
+
+    const readyState = mongoose.connection.readyState;
+    const remoteReady = conn.ok && readyState === 1;
     const { host, dbName } = this.parseMongoUri(this.activeUri);
-    const configured = this.parseMongoUri(this.store.mongoUri || process.env.MONGODB_URI || '');
+    const configuredUri = (this.store.mongoUri || process.env.MONGODB_URI || '').trim();
+    const configured = this.parseMongoUri(configuredUri);
+
+    const statusLabel = remoteReady
+      ? 'اتصال برقرار است'
+      : readyState === 2
+        ? 'در حال اتصال به سرور MongoDB…'
+        : readyState === 3
+          ? 'در حال قطع اتصال…'
+          : 'اتصال برقرار نیست';
 
     return {
       isRemoteConnected: remoteReady,
-      readyState: mongoose.connection.readyState,
-      statusLabel: remoteReady ? 'اتصال برقرار است' : 'اتصال برقرار نیست',
+      readyState,
+      statusLabel,
       engineLabel: remoteReady
         ? 'متصل به سرور MongoDB Atlas (Mongoose ODM)'
         : 'موتور دیتابیس داخلی (ذخیره‌سازی دیسک موقت — با هر دیپلوی پاک می‌شود)',
       clusterHost: remoteReady ? host : configured.host || '—',
       databaseName: remoteReady ? dbName : configured.dbName || '—',
-      hasConfiguredUri: Boolean((this.store.mongoUri || process.env.MONGODB_URI || '').trim()),
+      hasConfiguredUri: Boolean(configuredUri),
+      uriSource: this.uriSource(),
+      envConfigured: Boolean(
+        (process.env.MONGODB_URI || '').trim() &&
+          (process.env.MONGODB_URI || '').trim() !== 'MY_MONGODB_URI'
+      ),
       activeUri: this.isMongoConnected ? this.maskMongoUri(this.activeUri) : '—',
       configuredExternalUri: this.maskMongoUri(this.store.mongoUri),
-      lastError: this.lastConnectionError,
+      lastError: conn.ok ? this.lastConnectionError : conn.error || this.lastConnectionError,
+      lastConnectedAt: this.lastConnectedAt,
+      lastDisconnectAt: this.lastDisconnectAt,
+      lastDisconnectReason: this.lastDisconnectReason,
+      lastPingAt: this.lastPingAt,
+      lastConnectAttemptAt: this.lastConnectAttemptAt
+        ? new Date(this.lastConnectAttemptAt).toISOString()
+        : null,
+      reconnectCount: this.reconnectCount,
+      disconnectCount: this.disconnectCount,
       collections: {
-        users: users.length,
-        symbols: symbols.length,
-        telegramMessages: messages.length,
+        users: counts.users,
+        symbols: counts.symbols,
+        telegramMessages: counts.telegramMessages,
         telegramBotConfigured: Boolean(tgConfig?.botToken),
-        registeredSignals: signals.length,
+        registeredSignals: counts.registeredSignals,
       },
     };
   }
@@ -1378,6 +1720,11 @@ class DatabaseEngine {
   /** True when the remote MongoDB store is actually usable right now. */
   public isRemoteReady(): boolean {
     return this.isMongoConnected && mongoose.connection.readyState === 1;
+  }
+
+  public hasConfiguredUri(): boolean {
+    const uri = (this.store.mongoUri || process.env.MONGODB_URI || '').trim();
+    return Boolean(uri && uri !== 'MY_MONGODB_URI');
   }
 
   /**
