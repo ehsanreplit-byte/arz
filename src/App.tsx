@@ -23,6 +23,7 @@ import {
   Activity,
   Wallet,
   Target,
+  Zap,
 } from 'lucide-react';
 import {
   apiClient,
@@ -40,12 +41,14 @@ import { DatabaseSettings } from './components/DatabaseSettings';
 import { SignalsPanel } from './components/SignalsPanel';
 import { AccountPanel } from './components/AccountPanel';
 import { TradePanel } from './components/TradePanel';
+import { WeexTradePanel } from './components/WeexTradePanel';
 
 type ActiveMenu =
   | 'dashboard'
   | 'binance'
   | 'signals'
   | 'trade'
+  | 'weex'
   | 'account'
   | 'telegram'
   | 'chatgpt'
@@ -257,6 +260,7 @@ export default function App() {
     { id: 'binance', label: 'قیمت لحظه‌ای بایننس', icon: LineChart, badge: symbols.length },
     { id: 'signals', label: 'سیگنال‌ها', icon: Activity },
     { id: 'trade', label: 'ترید', icon: Target },
+    { id: 'weex', label: 'ترید WEEX', icon: Zap },
     { id: 'account', label: 'حساب کاربری', icon: Wallet },
     {
       id: 'telegram',
@@ -717,6 +721,9 @@ export default function App() {
 
           {/* View 2D: Demo Trade Terminal (ترید) */}
           {activeMenu === 'trade' && <TradePanel />}
+
+          {/* View 2E: WEEX Futures Trading (ترید WEEX) */}
+          {activeMenu === 'weex' && <WeexTradePanel />}
 
           {/* View 3: Direct Telegram Bot Connection & Message Inbox */}
           {activeMenu === 'telegram' && <TelegramBotManager tickers={tickers} />}
