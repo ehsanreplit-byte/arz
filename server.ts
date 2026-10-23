@@ -3042,6 +3042,21 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
     }
   });
 
+  app.post('/api/weex/signals/trade-all', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const userId = await requireUser(req);
+      const body = req.body as Record<string, any>;
+      const result = await weexEngine.tradeAllSignals(userId, {
+        margin: body.margin !== undefined ? Number(body.margin) : undefined,
+        mode: body.mode === 'live' ? 'live' : body.mode === 'paper' ? 'paper' : undefined,
+        orderType: body.orderType === 'MARKET' ? 'MARKET' : 'LIMIT',
+      });
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || 'خطا در ارسال سیگنال‌ها به پوزیشن' });
+    }
+  });
+
   app.post(
     '/api/weex/signals/:id/trade',
     authMiddleware,
