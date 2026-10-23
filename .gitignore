@@ -9,3 +9,6 @@ coverage/
 
 # Runtime disk store (contains local admin users & secrets)
 data/
+
+# Local scratch (extraction scripts, API dumps)
+work/
