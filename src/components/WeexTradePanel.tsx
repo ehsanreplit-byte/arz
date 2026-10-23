@@ -363,6 +363,7 @@ export function WeexTradePanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [tab, setTab] = useState<'active' | 'history' | 'signals'>('active');
 
@@ -471,6 +472,18 @@ export function WeexTradePanel() {
       setBusy(false);
     }
   };
+
+  // keep the newest result visible even when the list is scrolled far down
+  useEffect(() => {
+    if (message) setToast({ type: 'ok', text: message });
+    else if (error) setToast({ type: 'err', text: error });
+  }, [message, error]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 7000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   const saveSettings = (patch: Parameters<typeof apiClient.saveWeexSettings>[0], msg: string) =>
     run(async () => {
@@ -645,6 +658,27 @@ export function WeexTradePanel() {
           <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>{error}</span>
+          </div>
+        )}
+
+        {settings && !settings.autoTrade && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-start gap-2 text-[11px] text-amber-800 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+              <span>
+                <b>ارسال خودکار به پوزیشن خاموش است.</b> با این وضعیت، سیگنال‌های تأییدشده به‌صورت
+                خودکار به پوزیشن/سفارش WEEX تبدیل نمی‌شوند. روشنش کنید تا هر سیگنال یک سفارش
+                LIMIT روی نقطه ورود بسازد و با رسیدن قیمت، معامله فعال شود.
+              </span>
+            </div>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void saveSettings({ autoTrade: true }, 'ارسال خودکار سیگنال‌ها به پوزیشن فعال شد.')}
+              className="px-3 py-2 rounded-lg text-[11px] font-extrabold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              روشن کردن ارسال خودکار
+            </button>
           </div>
         )}
       </div>
@@ -1107,9 +1141,17 @@ export function WeexTradePanel() {
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-xs font-extrabold text-slate-900">{signal.symbol}</span>
                       <SideBadge side={signal.consensusDirection === 'SHORT' ? 'SHORT' : 'LONG'} />
-                      {signal.alreadyTraded && (
+                      {signal.alreadyTraded ? (
                         <span className="text-[9px] font-bold text-blue-700 bg-blue-50 border border-blue-200 rounded px-1.5 py-0.5">
-                          معامله شد
+                          در پوزیشن است
+                        </span>
+                      ) : signal.tradable ? (
+                        <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5">
+                          قابل ارسال
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-bold text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5">
+                          قابل معامله نیست
                         </span>
                       )}
                     </div>
@@ -1135,14 +1177,20 @@ export function WeexTradePanel() {
                       فاصله تا ورود: {fmtPct(signal.distanceToEntryPct)}
                     </span>
                   </div>
+                  {!signal.tradable && signal.tradeBlockReason && (
+                    <div className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 leading-relaxed">
+                      {signal.tradeBlockReason}
+                    </div>
+                  )}
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
-                      disabled={busy || signal.alreadyTraded}
+                      disabled={busy || !signal.tradable}
+                      title={signal.tradeBlockReason || undefined}
                       onClick={() => void tradeSignalNow(signal)}
                       className="flex-1 px-2 py-1.5 rounded-lg text-[10px] font-extrabold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors cursor-pointer"
                     >
-                      معامله فوری
+                      ارسال به پوزیشن
                     </button>
                     <button
                       type="button"
@@ -1278,6 +1326,25 @@ export function WeexTradePanel() {
                 ریست حساب مجازی
               </button>
             )}
+            {tab === 'signals' && approvedSignals.length > 0 && (
+              <button
+                type="button"
+                disabled={busy || !approvedSignals.some((s) => s.tradable)}
+                onClick={() =>
+                  void run(async () => {
+                    const res = await apiClient.tradeAllWeexSignals({ mode, orderType: 'LIMIT' });
+                    setMessage(
+                      `${res.created} سیگنال به پوزیشن ارسال شد` +
+                        (res.skipped > 0 ? ` — ${res.skipped} مورد رد شد` : '') +
+                        (res.notes.length > 0 ? ` | ${res.notes[0]}` : '')
+                    );
+                  })
+                }
+                className="px-3 py-1.5 rounded-lg text-[10px] font-extrabold bg-emerald-600 text-white hover:bg-emerald-700 disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                ارسال همه به پوزیشن
+              </button>
+            )}
             {tab === 'history' && history.length > 0 && (
               <button
                 type="button"
@@ -1354,6 +1421,11 @@ export function WeexTradePanel() {
                         ورود {fmtPrice(signal.entryPrice)} · SL {fmtPrice(signal.stopLoss)} · TP1{' '}
                         {fmtPrice(signal.takeProfit1)} · TP2 {fmtPrice(signal.takeProfit2)}
                       </span>
+                      {!signal.tradable && signal.tradeBlockReason && (
+                        <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+                          {signal.tradeBlockReason}
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -1365,11 +1437,12 @@ export function WeexTradePanel() {
                       </button>
                       <button
                         type="button"
-                        disabled={busy || signal.alreadyTraded}
+                        disabled={busy || !signal.tradable}
+                        title={signal.tradeBlockReason || undefined}
                         onClick={() => void tradeSignalNow(signal)}
                         className="px-2.5 py-1.5 rounded-lg text-[10px] font-extrabold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 cursor-pointer"
                       >
-                        معامله
+                        ارسال به پوزیشن
                       </button>
                     </div>
                   </div>
@@ -1398,6 +1471,31 @@ export function WeexTradePanel() {
             ))}
         </div>
       </div>
+
+      {toast && (
+        <div
+          className={`fixed bottom-5 left-5 z-50 max-w-[92vw] sm:max-w-md px-4 py-3 rounded-xl shadow-lg text-xs font-semibold flex items-start gap-2 ${
+            toast.type === 'ok'
+              ? 'bg-emerald-600 text-white'
+              : 'bg-red-600 text-white'
+          }`}
+        >
+          {toast.type === 'ok' ? (
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+          )}
+          <span className="leading-relaxed">{toast.text}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="mr-auto text-white/80 hover:text-white cursor-pointer"
+            aria-label="بستن"
+          >
+            ×
+          </button>
+        </div>
+      )}
     </div>
   );
 }
