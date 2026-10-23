@@ -818,6 +818,27 @@ class WeexEngine {
     }
 
     const client = this.signedClient(settings);
+
+    // The exchange keeps a per-symbol leverage that is independent from the
+    // panel setting; without this call orders were opened with the account's
+    // previous leverage (commonly 20x) instead of the configured one.
+    try {
+      const levResult = await client.setLeverage(base.symbol, base.leverage);
+      if (!levResult.success) {
+        return {
+          ok: false,
+          message: `تنظیم اهرم ${base.leverage}x برای ${base.symbol} در WEEX پذیرفته نشد.`,
+          position: null,
+        };
+      }
+    } catch (err: any) {
+      return {
+        ok: false,
+        message: `تنظیم اهرم ${base.leverage}x برای ${base.symbol} ناموفق بود: ${err?.message || 'خطای صرافی'}`,
+        position: null,
+      };
+    }
+
     const isMarket = base.orderType === 'MARKET';
     let priceText = formatToPrecision(base.entryTarget, rules.pricePrecision || 2);
     let qtyText = formatToPrecision(base.quantity, rules.quantityPrecision || 0);
