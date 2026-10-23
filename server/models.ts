@@ -485,6 +485,27 @@ export const RegisteredSignalModel =
 // 2. Persistent Disk Mirror + Live Mongoose Connection Manager
 // ============================================================================
 
+export type WipeScope = 'signals' | 'demo' | 'weex' | 'telegram' | 'symbols';
+
+export interface WipeDatabaseOptions {
+  scopes?: WipeScope[];
+  /** delete every admin account EXCEPT `keepAdminEmail` */
+  includeAdmins?: boolean;
+  keepAdminEmail?: string;
+  /** snapshot the local mirror to data/backups before deleting (default true) */
+  backup?: boolean;
+}
+
+export interface WipeDatabaseResult {
+  ok: boolean;
+  backupFile: string;
+  scopes: WipeScope[];
+  mongoDeleted: Record<string, number>;
+  diskCleared: Record<string, number>;
+  adminDeleted: number;
+  message: string;
+}
+
 interface PersistentStoreData {
   mongoUri: string;
   users: IAdminUser[];
@@ -1119,20 +1140,30 @@ class DatabaseEngine {
       registeredSignals: Array.isArray(this.store.registeredSignals)
         ? this.store.registeredSignals.length
         : 0,
+      demoAccounts: Array.isArray(this.store.tradeAccounts) ? this.store.tradeAccounts.length : 0,
+      demoPositions: Array.isArray(this.store.positions) ? this.store.positions.length : 0,
+      weexPositions: Array.isArray(this.store.weexPositions) ? this.store.weexPositions.length : 0,
     };
 
     if (mongoose.connection.readyState === 1) {
       try {
-        const [users, symbols, messages, signals] = await Promise.all([
-          AdminUserModel.countDocuments(),
-          CryptoSymbolModel.countDocuments(),
-          TelegramMessageModel.countDocuments(),
-          RegisteredSignalModel.countDocuments(),
-        ]);
+        const [users, symbols, messages, signals, demoAccounts, demoPositions, weexPositions] =
+          await Promise.all([
+            AdminUserModel.countDocuments(),
+            CryptoSymbolModel.countDocuments(),
+            TelegramMessageModel.countDocuments(),
+            RegisteredSignalModel.countDocuments(),
+            TradeAccountModel.countDocuments(),
+            PositionModel.countDocuments(),
+            WeexPositionModel.countDocuments(),
+          ]);
         counts.users = Math.max(counts.users, users);
         counts.symbols = Math.max(counts.symbols, symbols);
         counts.telegramMessages = Math.max(counts.telegramMessages, messages);
         counts.registeredSignals = Math.max(counts.registeredSignals, signals);
+        counts.demoAccounts = Math.max(counts.demoAccounts, demoAccounts);
+        counts.demoPositions = Math.max(counts.demoPositions, demoPositions);
+        counts.weexPositions = Math.max(counts.weexPositions, weexPositions);
       } catch (err: any) {
         this.lastConnectionError = this.explainMongoError(err);
       }
@@ -1192,6 +1223,9 @@ class DatabaseEngine {
         telegramMessages: counts.telegramMessages,
         telegramBotConfigured: Boolean(tgConfig?.botToken),
         registeredSignals: counts.registeredSignals,
+        demoAccounts: counts.demoAccounts,
+        demoPositions: counts.demoPositions,
+        weexPositions: counts.weexPositions,
       },
     };
   }
@@ -1725,6 +1759,127 @@ class DatabaseEngine {
   public hasConfiguredUri(): boolean {
     const uri = (this.store.mongoUri || process.env.MONGODB_URI || '').trim();
     return Boolean(uri && uri !== 'MY_MONGODB_URI');
+  }
+
+  // ==========================================================================
+  // One-shot database wipe (danger zone)
+  // ==========================================================================
+  /**
+   * Deletes application data from BOTH stores.
+   *
+   * Deleting only MongoDB is not enough: reads merge the MongoDB collection with
+   * the on-disk mirror, so untouched disk rows would reappear immediately.
+   *
+   * The current admin account, the MongoDB URI and the AvalAI/Telegram bot
+   * configuration are preserved unless the caller explicitly asks otherwise.
+   */
+  public async wipeDatabase(options: WipeDatabaseOptions = {}): Promise<WipeDatabaseResult> {
+    const allowed: WipeScope[] = ['signals', 'demo', 'weex', 'telegram', 'symbols'];
+    const scopes = (options.scopes && options.scopes.length > 0
+      ? options.scopes.filter((s): s is WipeScope => allowed.includes(s))
+      : allowed) as WipeScope[];
+    const includeAdmins = Boolean(options.includeAdmins);
+    const keepAdminEmail = (options.keepAdminEmail || '').trim().toLowerCase();
+    const doBackup = options.backup !== false;
+
+    let backupFile = '';
+    if (doBackup) {
+      try {
+        const dir = path.join(DATA_DIR, 'backups');
+        fs.mkdirSync(dir, { recursive: true });
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+        backupFile = path.join(dir, `wipe-${stamp}.json`);
+        // The disk mirror is a full copy of what the app has written, so this
+        // single file is a restorable snapshot without scanning Atlas.
+        fs.copyFileSync(STORE_PATH, backupFile);
+      } catch (err: any) {
+        console.warn('[db] wipe backup failed:', err?.message || err);
+        backupFile = '';
+      }
+    }
+
+    const mongoDeleted: Record<string, number> = {};
+    const diskCleared: Record<string, number> = {};
+    let adminDeleted = 0;
+
+    const readDiskCount = (key: WipeScope): number => {
+      if (key === 'signals') return this.store.registeredSignals?.length || 0;
+      if (key === 'demo') return (this.store.tradeAccounts?.length || 0) + (this.store.positions?.length || 0);
+      if (key === 'weex') return this.store.weexPositions?.length || 0;
+      if (key === 'telegram') return this.store.telegramMessages?.length || 0;
+      if (key === 'symbols') return this.store.symbols?.length || 0;
+      return 0;
+    };
+    for (const scope of scopes) diskCleared[scope] = readDiskCount(scope);
+
+    if (mongoose.connection.readyState === 1) {
+      const jobs: Array<[string, any]> = [];
+      if (scopes.includes('signals')) jobs.push(['registeredSignals', RegisteredSignalModel]);
+      if (scopes.includes('demo')) {
+        jobs.push(['tradeAccounts', TradeAccountModel]);
+        jobs.push(['positions', PositionModel]);
+      }
+      if (scopes.includes('weex')) jobs.push(['weexPositions', WeexPositionModel]);
+      if (scopes.includes('telegram')) jobs.push(['telegramMessages', TelegramMessageModel]);
+      if (scopes.includes('symbols')) jobs.push(['symbols', CryptoSymbolModel]);
+
+      for (const [name, model] of jobs) {
+        try {
+          const res = await model.deleteMany({});
+          mongoDeleted[name] = Number(res?.deletedCount || 0);
+        } catch (err: any) {
+          console.warn(`[db] wipe ${name} failed:`, err?.message || err);
+          mongoDeleted[name] = -1;
+        }
+      }
+
+      if (includeAdmins) {
+        try {
+          const filter = keepAdminEmail ? { email: { $ne: keepAdminEmail } } : {};
+          const res = await AdminUserModel.deleteMany(filter);
+          adminDeleted = Number(res?.deletedCount || 0);
+        } catch (err: any) {
+          console.warn('[db] wipe admins failed:', err?.message || err);
+        }
+      }
+    } else if (includeAdmins) {
+      const before = this.store.users.length;
+      this.store.users = keepAdminEmail
+        ? this.store.users.filter((u) => String(u.email || '').toLowerCase() === keepAdminEmail)
+        : [];
+      adminDeleted = Math.max(0, before - this.store.users.length);
+    }
+
+    // ---- clear the disk mirror so deleted rows cannot come back ----
+    if (scopes.includes('signals')) this.store.registeredSignals = [];
+    if (scopes.includes('demo')) {
+      this.store.tradeAccounts = [];
+      this.store.positions = [];
+    }
+    if (scopes.includes('weex')) this.store.weexPositions = [];
+    if (scopes.includes('telegram')) this.store.telegramMessages = [];
+    if (scopes.includes('symbols')) this.store.symbols = [];
+    if (includeAdmins && keepAdminEmail) {
+      this.store.users = this.store.users.filter(
+        (u) => String(u.email || '').toLowerCase() === keepAdminEmail
+      );
+    }
+    this.saveDiskStore();
+
+    const totalMongo = Object.values(mongoDeleted).reduce((a, b) => a + Math.max(0, b), 0);
+    const message = `پاکسازی انجام شد — ${totalMongo} رکورد از MongoDB` +
+      (adminDeleted > 0 ? ` و ${adminDeleted} حساب ادمین` : '') +
+      (backupFile ? ` | نسخه پشتیبان: ${path.relative(process.cwd(), backupFile)}` : ' | بدون نسخه پشتیبان');
+
+    return {
+      ok: true,
+      backupFile: backupFile ? path.relative(process.cwd(), backupFile) : '',
+      scopes,
+      mongoDeleted,
+      diskCleared,
+      adminDeleted,
+      message,
+    };
   }
 
   /**
