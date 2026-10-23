@@ -123,6 +123,7 @@ function SignalsBreakdown({ items }: { items: SignalMethodItem[] }) {
 export function SignalsPanel() {
   const [signals, setSignals] = useState<RegisteredSignalInfo[]>([]);
   const [totalSignals, setTotalSignals] = useState<number | null>(null);
+  const [totalEvaluated, setTotalEvaluated] = useState<number | null>(null);
   const [status, setStatus] = useState<SignalEngineStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -145,6 +146,7 @@ export function SignalsPanel() {
       ]);
       setSignals(signalsRes.signals || []);
       setTotalSignals(signalsRes.total ?? null);
+      setTotalEvaluated(signalsRes.totalEvaluated ?? null);
       setStatus(statusRes.status);
       setError(null);
     } catch (err: any) {
@@ -415,11 +417,13 @@ export function SignalsPanel() {
       {/* Summary metrics */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
-          <div className="text-xs text-slate-500">کل ارزهای بررسی‌شده</div>
+          <div className="text-xs text-slate-500">کل ارزیابی‌های انجام‌شده</div>
           <div className="text-2xl font-extrabold text-slate-900 font-mono-tabular">
-            {signals.length}
+            {(totalEvaluated ?? status?.totalEvaluated ?? 0).toLocaleString('en-US')}
           </div>
-          <div className="text-xs text-slate-500">از لیست قیمت لحظه‌ای</div>
+          <div className="text-xs text-slate-500">
+            شمارش هر بار بررسی یک ارز (مستقل از تعداد رکوردهای ذخیره‌شده)
+          </div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1.5">
           <div className="text-xs text-slate-500">
