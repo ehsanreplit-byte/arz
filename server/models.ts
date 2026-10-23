@@ -177,6 +177,159 @@ export interface IPosition {
   updatedAt: string;
 }
 
+// ============================================================================
+// WEEX Trading (virtual/paper + live exchange) Models
+// ============================================================================
+export interface IWeexFill {
+  type: 'OPEN' | 'PARTIAL_CLOSE' | 'CLOSE';
+  price: number;
+  quantity: number;
+  pnl: number;
+  fee: number;
+  note: string;
+  at: string;
+}
+
+export interface IWeexSettings {
+  _id: string;
+  userId: string;
+  /** paper = simulated fills on WEEX prices, live = real orders on the exchange */
+  mode: 'paper' | 'live';
+  environment: 'production' | 'simulation';
+  apiKey: string;
+  apiSecret: string;
+  passphrase: string;
+  leverage: number;
+  marginPerTradePct: number;
+  /** % of the position closed at TP1 (rest runs to TP2 / SL) */
+  tp1ClosePct: number;
+  /** automatically mirror every approved (qualified) signal */
+  autoTrade: boolean;
+  /** only take pullback entries (skip breakouts), same rule as the demo engine */
+  pullbackOnly: boolean;
+  /** taker fee percentage used by the paper engine (0.05 = 0.05%) */
+  feeRatePct: number;
+  paperInitialBalance: number;
+  paperBalance: number;
+  lastTestStatus: 'success' | 'error' | 'untested';
+  lastTestMessage: string;
+  lastTestAt?: string;
+  updatedAt: string;
+}
+
+export interface IWeexPosition {
+  _id: string;
+  userId: string;
+  mode: 'paper' | 'live';
+  signalId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  status: 'PENDING' | 'OPEN' | 'CLOSED';
+  orderType: 'MARKET' | 'LIMIT';
+  /** pending LIMIT waits for the price to rise (true) or fall (false) to entryTarget */
+  triggerAbove: boolean;
+  entryTarget: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit1: number;
+  takeProfit2: number;
+  quantity: number;
+  remainingQuantity: number;
+  notional: number;
+  margin: number;
+  leverage: number;
+  realizedPnl: number;
+  feePaid: number;
+  tp1Hit: boolean;
+  closeReason: string;
+  signalCycleNumber: number;
+  aiEngineUsed: string;
+  averageScore: number;
+  fills: IWeexFill[];
+  exchangeOrderId: string;
+  exchangeTp1OrderId: string;
+  exchangeTp2OrderId: string;
+  exchangeSlOrderId: string;
+  exchangePositionId: string;
+  lastPrice: number;
+  note: string;
+  createdAt: string;
+  openedAt: string | null;
+  closedAt: string | null;
+  updatedAt: string;
+}
+
+const WeexSettingsSchema = new Schema<IWeexSettings & Document>({
+  userId: { type: String, required: true, unique: true, index: true },
+  mode: { type: String, enum: ['paper', 'live'], default: 'paper' },
+  environment: { type: String, enum: ['production', 'simulation'], default: 'production' },
+  apiKey: { type: String, default: '' },
+  apiSecret: { type: String, default: '' },
+  passphrase: { type: String, default: '' },
+  leverage: { type: Number, default: 5 },
+  marginPerTradePct: { type: Number, default: 10 },
+  tp1ClosePct: { type: Number, default: 50 },
+  autoTrade: { type: Boolean, default: false },
+  pullbackOnly: { type: Boolean, default: true },
+  feeRatePct: { type: Number, default: 0.05 },
+  paperInitialBalance: { type: Number, default: 1000 },
+  paperBalance: { type: Number, default: 1000 },
+  lastTestStatus: { type: String, default: 'untested' },
+  lastTestMessage: { type: String, default: '' },
+  lastTestAt: { type: String, default: null },
+  updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
+const WeexPositionSchema = new Schema<IWeexPosition & Document>({
+  userId: { type: String, required: true, index: true },
+  mode: { type: String, enum: ['paper', 'live'], default: 'paper', index: true },
+  signalId: { type: String, default: '' },
+  symbol: { type: String, required: true, index: true },
+  label: { type: String, default: '' },
+  side: { type: String, enum: ['LONG', 'SHORT'], required: true },
+  status: { type: String, enum: ['PENDING', 'OPEN', 'CLOSED'], default: 'PENDING', index: true },
+  orderType: { type: String, enum: ['MARKET', 'LIMIT'], default: 'MARKET' },
+  triggerAbove: { type: Boolean, default: false },
+  entryTarget: { type: Number, default: 0 },
+  entryPrice: { type: Number, default: 0 },
+  stopLoss: { type: Number, default: 0 },
+  takeProfit1: { type: Number, default: 0 },
+  takeProfit2: { type: Number, default: 0 },
+  quantity: { type: Number, default: 0 },
+  remainingQuantity: { type: Number, default: 0 },
+  notional: { type: Number, default: 0 },
+  margin: { type: Number, default: 0 },
+  leverage: { type: Number, default: 5 },
+  realizedPnl: { type: Number, default: 0 },
+  feePaid: { type: Number, default: 0 },
+  tp1Hit: { type: Boolean, default: false },
+  closeReason: { type: String, default: '' },
+  signalCycleNumber: { type: Number, default: 0 },
+  aiEngineUsed: { type: String, default: '' },
+  averageScore: { type: Number, default: 0 },
+  fills: { type: Schema.Types.Mixed, default: [] },
+  exchangeOrderId: { type: String, default: '' },
+  exchangeTp1OrderId: { type: String, default: '' },
+  exchangeTp2OrderId: { type: String, default: '' },
+  exchangeSlOrderId: { type: String, default: '' },
+  exchangePositionId: { type: String, default: '' },
+  lastPrice: { type: Number, default: 0 },
+  note: { type: String, default: '' },
+  createdAt: { type: String, default: () => new Date().toISOString() },
+  openedAt: { type: String, default: null },
+  closedAt: { type: String, default: null },
+  updatedAt: { type: String, default: () => new Date().toISOString() },
+});
+
+export const WeexSettingsModel =
+  mongoose.models.WeexSettings ||
+  mongoose.model<IWeexSettings & Document>('WeexSettings', WeexSettingsSchema);
+
+export const WeexPositionModel =
+  mongoose.models.WeexPosition ||
+  mongoose.model<IWeexPosition & Document>('WeexPosition', WeexPositionSchema);
+
 const TradeAccountSchema = new Schema<ITradeAccount & Document>({
   userId: { type: String, required: true, unique: true, index: true },
   initialBalance: { type: Number, default: 100 },
@@ -342,6 +495,8 @@ interface PersistentStoreData {
   registeredSignals?: IRegisteredSignal[];
   tradeAccounts?: ITradeAccount[];
   positions?: IPosition[];
+  weexSettings?: IWeexSettings[];
+  weexPositions?: IWeexPosition[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -430,6 +585,8 @@ class DatabaseEngine {
           registeredSignals: Array.isArray(parsed.registeredSignals) ? parsed.registeredSignals : [],
           tradeAccounts: Array.isArray(parsed.tradeAccounts) ? parsed.tradeAccounts : [],
           positions: Array.isArray(parsed.positions) ? parsed.positions : [],
+          weexSettings: Array.isArray(parsed.weexSettings) ? parsed.weexSettings : [],
+          weexPositions: Array.isArray(parsed.weexPositions) ? parsed.weexPositions : [],
         };
         if (updatedStore.avalaiConfig && (!updatedStore.avalaiConfig.apiKey || updatedStore.avalaiConfig.apiKey === '')) {
           updatedStore.avalaiConfig.apiKey = 'aa-u0S6Ls0H00KMvWJrthbwwYMWRUzmtCCL8R1IKXK6W2KepJTw';
@@ -486,6 +643,8 @@ class DatabaseEngine {
       registeredSignals: [],
       tradeAccounts: [],
       positions: [],
+      weexSettings: [],
+      weexPositions: [],
     };
     this.saveDiskStore(initialStore);
     return initialStore;
@@ -605,6 +764,28 @@ class DatabaseEngine {
       if (posCount === 0 && Array.isArray(this.store.positions)) {
         for (const p of this.store.positions) {
           await PositionModel.updateOne(
+            { _id: p._id },
+            { $setOnInsert: { ...p, _id: p._id } },
+            { upsert: true }
+          );
+        }
+      }
+
+      const weexCfgCount = await WeexSettingsModel.countDocuments();
+      if (weexCfgCount === 0 && Array.isArray(this.store.weexSettings)) {
+        for (const s of this.store.weexSettings) {
+          await WeexSettingsModel.updateOne(
+            { _id: s._id },
+            { $setOnInsert: { ...s, _id: s._id } },
+            { upsert: true }
+          );
+        }
+      }
+
+      const weexPosCount = await WeexPositionModel.countDocuments();
+      if (weexPosCount === 0 && Array.isArray(this.store.weexPositions)) {
+        for (const p of this.store.weexPositions) {
+          await WeexPositionModel.updateOne(
             { _id: p._id },
             { $setOnInsert: { ...p, _id: p._id } },
             { upsert: true }
@@ -1534,6 +1715,241 @@ class DatabaseEngine {
     }
     this.store.positions = userId
       ? this.store.positions.filter((p) => p.userId !== userId)
+      : [];
+    this.saveDiskStore();
+  }
+
+  // ==========================================================================
+  // WEEX trading settings (per admin user)
+  // ==========================================================================
+  public async getWeexSettings(userId: string): Promise<IWeexSettings> {
+    const fromDisk =
+      (Array.isArray(this.store.weexSettings) ? this.store.weexSettings : []).find(
+        (s) => s.userId === userId
+      ) || null;
+    let fromMongo: IWeexSettings | null = null;
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const doc = await WeexSettingsModel.findOne({ userId }).lean();
+        if (doc) fromMongo = { ...(doc as any), _id: String(doc._id) };
+      } catch {
+        fromMongo = null;
+      }
+    }
+
+    const existing = fromMongo || fromDisk;
+    if (existing) return existing;
+
+    const now = new Date().toISOString();
+    const created: IWeexSettings = {
+      _id: generateObjectId(),
+      userId,
+      mode: 'paper',
+      environment: 'production',
+      apiKey: process.env.WEEX_API_KEY || '',
+      apiSecret: process.env.WEEX_API_SECRET || '',
+      passphrase: process.env.WEEX_API_PASSPHRASE || '',
+      leverage: 5,
+      marginPerTradePct: 10,
+      tp1ClosePct: 50,
+      autoTrade: false,
+      pullbackOnly: true,
+      feeRatePct: 0.05,
+      paperInitialBalance: 1000,
+      paperBalance: 1000,
+      lastTestStatus: 'untested',
+      lastTestMessage: '',
+      updatedAt: now,
+    };
+    if (!Array.isArray(this.store.weexSettings)) this.store.weexSettings = [];
+    this.store.weexSettings.push(created);
+    this.saveDiskStore();
+    return created;
+  }
+
+  public async updateWeexSettings(
+    userId: string,
+    patch: Partial<IWeexSettings>
+  ): Promise<IWeexSettings> {
+    const current = await this.getWeexSettings(userId);
+    const updated: IWeexSettings = {
+      ...current,
+      ...patch,
+      _id: current._id,
+      userId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const { _id, ...rest } = updated;
+      await WeexSettingsModel.updateOne(
+        { userId },
+        { $set: rest, $setOnInsert: { _id } },
+        { upsert: true }
+      );
+    }
+
+    if (!Array.isArray(this.store.weexSettings)) this.store.weexSettings = [];
+    const idx = this.store.weexSettings.findIndex((s) => s.userId === userId);
+    if (idx === -1) this.store.weexSettings.push(updated);
+    else this.store.weexSettings[idx] = updated;
+    this.saveDiskStore();
+    return updated;
+  }
+
+  /** Every user that has WEEX settings or WEEX positions (auto-trade scope). */
+  public async getAllWeexUserIds(): Promise<string[]> {
+    const ids = new Set<string>();
+    for (const s of Array.isArray(this.store.weexSettings) ? this.store.weexSettings : []) {
+      if (s?.userId) ids.add(String(s.userId));
+    }
+    for (const p of Array.isArray(this.store.weexPositions) ? this.store.weexPositions : []) {
+      if (p?.userId) ids.add(String(p.userId));
+    }
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        for (const s of await WeexSettingsModel.find().lean()) {
+          if ((s as any)?.userId) ids.add(String((s as any).userId));
+        }
+        for (const p of await WeexPositionModel.find().lean()) {
+          if ((p as any)?.userId) ids.add(String((p as any).userId));
+        }
+      } catch {
+        /* disk mirror is enough */
+      }
+    }
+    return [...ids];
+  }
+
+  // ==========================================================================
+  // WEEX Positions (paper + live order records)
+  // ==========================================================================
+  public async getWeexPositions(userId?: string): Promise<IWeexPosition[]> {
+    const byId = new Map<string, IWeexPosition>();
+    const disk = (Array.isArray(this.store.weexPositions) ? this.store.weexPositions : []).filter(
+      (p) => !userId || p.userId === userId
+    );
+    for (const p of disk) byId.set(p._id, p);
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const filter = userId ? { userId } : {};
+        const docs = await WeexPositionModel.find(filter).sort({ createdAt: -1 }).limit(1000).lean();
+        for (const d of docs) {
+          const remote = { ...(d as any), _id: String(d._id) } as IWeexPosition;
+          const local = byId.get(remote._id);
+          if (!local) {
+            byId.set(remote._id, remote);
+            continue;
+          }
+          const r = new Date(remote.updatedAt || remote.createdAt || 0).getTime();
+          const l = new Date(local.updatedAt || local.createdAt || 0).getTime();
+          if (r >= l) byId.set(remote._id, remote);
+        }
+      } catch {
+        /* fall back to the disk mirror */
+      }
+    }
+
+    return [...byId.values()].sort(
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+  }
+
+  public async getActiveWeexPositions(userId?: string): Promise<IWeexPosition[]> {
+    const all = await this.getWeexPositions(userId);
+    return all.filter((p) => p.status === 'PENDING' || p.status === 'OPEN');
+  }
+
+  public async createWeexPosition(
+    pos: Omit<IWeexPosition, '_id' | 'createdAt' | 'updatedAt'> & {
+      createdAt?: string;
+      updatedAt?: string;
+    }
+  ): Promise<IWeexPosition> {
+    const now = new Date().toISOString();
+    const created: IWeexPosition = {
+      ...pos,
+      _id: generateObjectId(),
+      createdAt: pos.createdAt || now,
+      updatedAt: pos.updatedAt || now,
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      const { _id, ...payload } = created;
+      const doc = await WeexPositionModel.create({ ...payload, _id });
+      created._id = String(doc._id);
+    }
+
+    if (!Array.isArray(this.store.weexPositions)) this.store.weexPositions = [];
+    this.store.weexPositions.unshift(created);
+    if (this.store.weexPositions.length > 2000) {
+      const active = this.store.weexPositions.filter(
+        (p) => p.status === 'PENDING' || p.status === 'OPEN'
+      );
+      const closed = this.store.weexPositions
+        .filter((p) => p.status === 'CLOSED')
+        .slice(0, Math.max(0, 2000 - active.length));
+      this.store.weexPositions = [...active, ...closed];
+    }
+    this.saveDiskStore();
+    return created;
+  }
+
+  public async updateWeexPosition(
+    id: string,
+    patch: Partial<IWeexPosition>
+  ): Promise<IWeexPosition | null> {
+    const updatedAt = new Date().toISOString();
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        await WeexPositionModel.updateOne({ _id: id }, { ...patch, updatedAt });
+      } catch {
+        /* keep the disk mirror in sync anyway */
+      }
+    }
+    if (!Array.isArray(this.store.weexPositions)) this.store.weexPositions = [];
+    const idx = this.store.weexPositions.findIndex((p) => p._id === id);
+    if (idx === -1) return null;
+    this.store.weexPositions[idx] = {
+      ...this.store.weexPositions[idx],
+      ...patch,
+      _id: this.store.weexPositions[idx]._id,
+      updatedAt,
+    };
+    this.saveDiskStore();
+    return this.store.weexPositions[idx];
+  }
+
+  public async deleteWeexPosition(id: string): Promise<boolean> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        await WeexPositionModel.deleteOne({ _id: id });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!Array.isArray(this.store.weexPositions)) return false;
+    const before = this.store.weexPositions.length;
+    this.store.weexPositions = this.store.weexPositions.filter((p) => p._id !== id);
+    this.saveDiskStore();
+    return this.store.weexPositions.length < before;
+  }
+
+  public async clearWeexPositions(userId?: string): Promise<void> {
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        await WeexPositionModel.deleteMany(userId ? { userId } : {});
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!Array.isArray(this.store.weexPositions)) {
+      this.store.weexPositions = [];
+      return;
+    }
+    this.store.weexPositions = userId
+      ? this.store.weexPositions.filter((p) => p.userId !== userId)
       : [];
     this.saveDiskStore();
   }
