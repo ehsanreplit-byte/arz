@@ -139,6 +139,7 @@ export interface SafeWeexSettings {
   maskedApiKey: string;
   leverage: number;
   marginPerTradePct: number;
+  marginPerTradeUsd: number;
   tp1ClosePct: number;
   autoTrade: boolean;
   pullbackOnly: boolean;
@@ -260,6 +261,7 @@ class WeexEngine {
       maskedApiKey: maskKey(settings.apiKey),
       leverage: settings.leverage,
       marginPerTradePct: settings.marginPerTradePct,
+      marginPerTradeUsd: settings.marginPerTradeUsd || 0,
       tp1ClosePct: settings.tp1ClosePct,
       autoTrade: settings.autoTrade,
       pullbackOnly: settings.pullbackOnly,
@@ -456,6 +458,10 @@ class WeexEngine {
     }
     if (patch.marginPerTradePct !== undefined) {
       next.marginPerTradePct = Math.min(100, Math.max(1, Number(patch.marginPerTradePct) || 10));
+    }
+    if (patch.marginPerTradeUsd !== undefined) {
+      // fixed USD margin; 0 switches back to the percentage mode
+      next.marginPerTradeUsd = Math.min(1_000_000, Math.max(0, Number(patch.marginPerTradeUsd) || 0));
     }
     if (patch.tp1ClosePct !== undefined) {
       next.tp1ClosePct = Math.min(100, Math.max(1, Number(patch.tp1ClosePct) || 50));
@@ -663,11 +669,15 @@ class WeexEngine {
       mode === 'paper'
         ? Math.max(0, settings.paperBalance)
         : await this.liveFreeMargin(settings);
-    let margin =
-      Number(input.margin) > 0
-        ? Number(input.margin)
-        : (settings.paperBalance * settings.marginPerTradePct) / 100;
-    if (mode === 'live' && !(Number(input.margin) > 0)) {
+
+    // Priority: explicit order value → fixed USD setting → percentage setting.
+    const fixedMarginUsd = Math.max(0, Number(settings.marginPerTradeUsd) || 0);
+    let margin: number;
+    if (Number(input.margin) > 0) {
+      margin = Number(input.margin);
+    } else if (fixedMarginUsd > 0) {
+      margin = Math.min(fixedMarginUsd, freeMargin);
+    } else {
       margin = (freeMargin * settings.marginPerTradePct) / 100;
     }
     if (!Number.isFinite(margin) || margin < MIN_MARGIN_USD) {
@@ -809,8 +819,8 @@ class WeexEngine {
 
     const client = this.signedClient(settings);
     const isMarket = base.orderType === 'MARKET';
-    const priceText = formatToPrecision(base.entryTarget, rules.pricePrecision || 2);
-    const qtyText = formatToPrecision(base.quantity, rules.quantityPrecision || 0);
+    let priceText = formatToPrecision(base.entryTarget, rules.pricePrecision || 2);
+    let qtyText = formatToPrecision(base.quantity, rules.quantityPrecision || 0);
     const clientOrderId = `wx${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
     try {
@@ -820,27 +830,64 @@ class WeexEngine {
       // TP2 is attached as the final target; TP1 is closed partially by the
       // engine tick using a reduce-only MARKET order.
       const attachTp = base.takeProfit2 > 0 ? base.takeProfit2 : base.takeProfit1;
-      const order = await client.placeOrder({
+      let slText =
+        base.stopLoss > 0 ? formatToPrecision(base.stopLoss, rules.pricePrecision || 2) : '';
+      let tpText =
+        attachTp > 0 ? formatToPrecision(attachTp, rules.pricePrecision || 2) : '';
+
+      const buildEntryBody = () => ({
         symbol: base.symbol,
-        side: base.side === 'LONG' ? 'BUY' : 'SELL',
+        side: base.side === 'LONG' ? 'BUY' : ('SELL' as const),
         positionSide: base.side,
         type: base.orderType,
         quantity: qtyText,
         newClientOrderId: clientOrderId,
-        ...(base.stopLoss > 0
-          ? {
-              slTriggerPrice: formatToPrecision(base.stopLoss, rules.pricePrecision || 2),
-              SlWorkingType: 'MARK_PRICE' as const,
-            }
-          : {}),
-        ...(attachTp > 0
-          ? {
-              tpTriggerPrice: formatToPrecision(attachTp, rules.pricePrecision || 2),
-              TpWorkingType: 'MARK_PRICE' as const,
-            }
-          : {}),
+        ...(slText ? { slTriggerPrice: slText, SlWorkingType: 'MARK_PRICE' as const } : {}),
+        ...(tpText ? { tpTriggerPrice: tpText, TpWorkingType: 'MARK_PRICE' as const } : {}),
         ...(isMarket ? {} : { timeInForce: 'GTC' as const, price: priceText }),
       });
+
+      const roundToStep = (value: number, step: number): number =>
+        Math.round(value / step) * step;
+
+      let order: Awaited<ReturnType<typeof client.placeOrder>> | null = null;
+      for (let attempt = 0; attempt < 5 && !order; attempt += 1) {
+        try {
+          order = await client.placeOrder(buildEntryBody() as any);
+        } catch (err: any) {
+          // WEEX sometimes enforces a coarser step than exchangeInfo's
+          // pricePrecision (e.g. OPUSDT requires 0.0001 while reporting 5).
+          // Parse the real step from the error and retry with the aligned
+          // entry / TP / SL / quantity instead of dropping the signal.
+          const msg = String(err?.message || '');
+          const stepMatch = /stepSize '([0-9.eE+-]+)'/.exec(msg);
+          if (!stepMatch || attempt === 4) throw err;
+          const step = Number(stepMatch[1]);
+          if (!Number.isFinite(step) || step <= 0) throw err;
+          const decimals =
+            step < 1 ? Math.min(12, Math.max(0, -Math.floor(Math.log10(step)))) : 0;
+          const stepText = (value: number) => roundToStep(value, step).toFixed(decimals);
+
+          if (/price|triggerprice/i.test(msg)) {
+            // entry, TP and SL all share the same tick size — align them
+            // together so one retry fixes all three.
+            priceText = stepText(base.entryTarget);
+            if (base.stopLoss > 0) slText = stepText(base.stopLoss);
+            if (attachTp > 0) tpText = stepText(attachTp);
+          } else {
+            const alignedQty = Math.floor(base.quantity / step) * step;
+            if (rules.minOrderSize > 0 && alignedQty < rules.minOrderSize) {
+              return {
+                ok: false,
+                message: `حجم سفارش پس از گرد شدن به stepSize (${step}) کمتر از حداقل صرافی است. مارجین بیشتری تنظیم کنید.`,
+                position: null,
+              };
+            }
+            qtyText = alignedQty.toFixed(decimals);
+          }
+        }
+      }
+      if (!order) throw new Error('ثبت سفارش در WEEX ناموفق بود.');
 
       if (!order.success || !order.orderId) {
         return {
@@ -940,7 +987,9 @@ class WeexEngine {
       });
 
       if (status === 'OPEN') {
-        await this.placeProtectionOrders(client, settings, position, position.quantity);
+        // SL/TP were attached to the entry order itself — placing them again
+        // through placeTpSlOrder would duplicate them (and that endpoint is
+        // rejected on some accounts/environments).
         const refreshed = await dbRepo.getWeexPositions(base.userId);
         const latest = refreshed.find((p) => p._id === position._id) || position;
         return {
@@ -1610,9 +1659,7 @@ class WeexEngine {
                       },
                     ],
                   });
-                  if (updated) {
-                    await this.placeProtectionOrders(client, settings, updated, filled);
-                  }
+                  // Protection came attached to the entry order.
                   summary.filled += 1;
                 } else if (info.status === 'CANCELED' || info.status === 'EXPIRED') {
                   await dbRepo.updateWeexPosition(pos._id, {
