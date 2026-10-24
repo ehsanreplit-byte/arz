@@ -1031,7 +1031,10 @@ class SignalEngine {
               const { weexEngine } = await import('./weexEngine.js');
               const weexResult = await weexEngine.ingestSignal(tempSignal);
               sentToWeex = weexResult.created > 0;
-              if (sentToWeex) {
+              // Keep the WEEX note even when it failed: it is the only place the
+              // rejection reason (pullback filter, 400 from the exchange, ...)
+              // becomes visible in the signals table.
+              if (weexResult.note) {
                 tradeNote = `${tradeNote ? `${tradeNote} | ` : ''}WEEX: ${weexResult.note}`;
               }
             } catch (weexErr: any) {
