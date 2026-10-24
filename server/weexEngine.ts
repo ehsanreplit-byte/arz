@@ -1421,10 +1421,26 @@ class WeexEngine {
     signalId: string,
     overrides?: { margin?: number; mode?: 'paper' | 'live'; orderType?: 'MARKET' | 'LIMIT' }
   ): Promise<{ ok: boolean; message: string; position: IWeexPosition | null }> {
-    const settings = await dbRepo.getWeexSettings(userId);
     const all = await dbRepo.getRegisteredSignals();
     const signal = all.find((s) => s._id === signalId);
     if (!signal) return { ok: false, message: 'سیگنال یافت نشد.', position: null };
+    return this.executeSignal(userId, signal, overrides);
+  }
+
+  /**
+   * Executes one signal object directly.
+   *
+   * The signals engine hands over a signal that is NOT persisted yet (it is
+   * only written after a position was created), so the auto-trade path must
+   * never look the signal up by id: doing that made every WEEX auto-trade fail
+   * with "سیگنال یافت نشد".
+   */
+  private async executeSignal(
+    userId: string,
+    signal: IRegisteredSignal,
+    overrides?: { margin?: number; mode?: 'paper' | 'live'; orderType?: 'MARKET' | 'LIMIT' }
+  ): Promise<{ ok: boolean; message: string; position: IWeexPosition | null }> {
+    const settings = await dbRepo.getWeexSettings(userId);
     if (!signal.isQualified || signal.consensusDirection === 'NO TRADE') {
       return { ok: false, message: 'این سیگنال تأیید نشده است.', position: null };
     }
@@ -1529,7 +1545,7 @@ class WeexEngine {
           notes.push('کلید API برای یکی از کاربران ثبت نشده است.');
           continue;
         }
-        const result = await this.tradeSignal(userId, signal._id, { mode: settings.mode });
+        const result = await this.executeSignal(userId, signal, { mode: settings.mode });
         if (result.ok) created += 1;
         else if (result.message) notes.push(result.message);
       } catch (err: any) {
