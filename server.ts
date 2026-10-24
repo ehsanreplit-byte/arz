@@ -9,13 +9,6 @@ import { createServer as createViteServer } from 'vite';
 import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
 import { signalEngine } from './server/signalEngine.js';
-import { watchlistRefresher } from './server/watchlistRefresh.js';
-import {
-  getBinanceUsdtBases,
-  getWeexUsdtTickers,
-  seedWeexDemoWatchlist,
-  WEEX_DEMO_BASES,
-} from './server/weexWatchlist.js';
 import { weexEngine } from './server/weexEngine.js';
 import {
   tradeEngine,
@@ -144,19 +137,7 @@ async function startServer() {
   await telegramWorker.initialize();
   signalEngine.initialize();
   tradeEngine.initialize();
-  watchlistRefresher.initialize();
   weexEngine.initialize();
-
-  // Seed the 142 coins that WEEX demo (SUSDT) actually trades into the
-  // watchlist, so the signal engine can analyse them. Idempotent and
-  // non-blocking: a slow MongoDB never delays the HTTP server boot.
-  void seedWeexDemoWatchlist().catch((err) =>
-    console.warn('[watchlist] WEEX demo seed failed:', err?.message || err)
-  );
-
-  // Warm the Binance universe cache in the background: it tells us which coins
-  // can be streamed from Binance and which must be priced from WEEX.
-  void getBinanceUsdtBases().catch(() => undefined);
 
   // ==========================================================================
   // 1. Auth Routes (JWT + bcryptjs + MongoDB)
@@ -345,134 +326,6 @@ async function startServer() {
       res.json({ ok: true, symbols });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در حذف ارز' });
-    }
-  });
-
-  // ---- Automatic watchlist (top market cap + most volatile, daily 08:00) ----
-  app.get('/api/watchlist/auto/status', authMiddleware, (_req: AuthenticatedRequest, res: Response) => {
-    res.json({ status: watchlistRefresher.getState() });
-  });
-
-  app.post('/api/watchlist/auto/refresh', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      const result = await watchlistRefresher.refresh('manual');
-      if (!result.ok) {
-        res.status(502).json({ ok: false, error: result.error, status: watchlistRefresher.getState() });
-        return;
-      }
-      res.json({
-        ok: true,
-        summary: result.summary,
-        status: watchlistRefresher.getState(),
-        symbols: await dbRepo.getSymbols(),
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'خطا در به‌روزرسانی خودکار لیست ارزها' });
-    }
-  });
-
-  // ---- WEEX demo (SUSDT) watchlist helpers ----
-  // Which bases can be streamed from Binance (invalid stream names close the
-  // whole combined websocket, so the front-end must filter them out).
-  app.get('/api/market/binance-bases', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      const bases = await getBinanceUsdtBases();
-      res.json({
-        bases: bases ? [...bases].sort() : [],
-        source: bases ? 'live' : 'unavailable',
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'خطا در خواندن لیست ارزهای بایننس' });
-    }
-  });
-
-  // Candles for any watchlist coin: Binance first, WEEX as fallback (the
-  // WEEX-only coins have no Binance pair, so the browser cannot fetch them
-  // directly). Returns Binance-shaped rows: [openTime,o,h,l,c,v,...].
-  app.get('/api/market/klines', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
-    try {
-      const symbol = String(req.query.symbol || 'BTCUSDT').toUpperCase().replace(/[^A-Z0-9]/g, '');
-      const interval = String(req.query.interval || '1h').replace(/[^a-zA-Z0-9]/g, '');
-      const limit = Math.min(1000, Math.max(30, Number(req.query.limit) || 400));
-      if (symbol.length < 5) {
-        res.status(400).json({ error: 'نماد نامعتبر است.' });
-        return;
-      }
-
-      const binanceUrls = [
-        `https://data-api.binance.vision/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-        `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`,
-      ];
-      const weexUrl = `https://api-contract.weex.com/capi/v3/market/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-
-      const fetchWeex = async () => {
-        try {
-          const r = await fetch(weexUrl, { signal: AbortSignal.timeout(12_000) });
-          if (!r.ok) return null;
-          const rows = await r.json();
-          if (!Array.isArray(rows) || rows.length < 30) return null;
-          return [...rows].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
-        } catch {
-          return null;
-        }
-      };
-
-      // Coins with no live Binance pair must be read from WEEX first, otherwise
-      // Binance answers with stale candles from its delisted (BREAK) market.
-      const bases = await getBinanceUsdtBases();
-      const base = symbol.endsWith('USDT') ? symbol.slice(0, -4) : symbol;
-      const preferWeex = !!bases && !bases.has(base);
-
-      if (preferWeex) {
-        const weexCandles = await fetchWeex();
-        if (weexCandles) {
-          res.json({ source: 'weex', candles: weexCandles });
-          return;
-        }
-      }
-
-      for (const url of binanceUrls) {
-        try {
-          const r = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-          if (!r.ok) continue;
-          const rows = await r.json();
-          if (Array.isArray(rows) && rows.length >= 30) {
-            res.json({ source: 'binance', candles: rows });
-            return;
-          }
-        } catch {
-          // try next endpoint
-        }
-      }
-
-      const weexCandles = preferWeex ? null : await fetchWeex();
-      if (weexCandles) {
-        res.json({ source: 'weex', candles: weexCandles });
-        return;
-      }
-
-      res.json({ source: 'none', candles: [] });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'خطا در خواندن کندل‌ها' });
-    }
-  });
-
-  // 24h tickers for the WEEX-only coins (prices shown in the watchlist table).
-  app.get('/api/watchlist/weex-tickers', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      res.json({ tickers: await getWeexUsdtTickers() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'خطا در خواندن قیمت‌های WEEX' });
-    }
-  });
-
-  // Re-add any missing WEEX demo coins (useful after "پاک‌سازی لیست ارزها").
-  app.post('/api/watchlist/weex-demo/seed', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
-    try {
-      const result = await seedWeexDemoWatchlist(true);
-      res.json({ ok: true, ...result, totalDemoCoins: WEEX_DEMO_BASES.length, symbols: await dbRepo.getSymbols() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message || 'خطا در افزودن ارزهای WEEX' });
     }
   });
 

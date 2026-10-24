@@ -21,41 +21,6 @@ export interface WatchlistSymbol {
   createdAt: string;
 }
 
-export interface WatchlistAutoSummary {
-  marketCapSymbols: string[];
-  volatileSymbols: string[];
-  added: number;
-  removed: number;
-  total: number;
-  marketCapSource: 'coingecko' | 'fallback';
-  volatileSource: 'binance' | 'none';
-}
-
-export interface WatchlistAutoStatus {
-  enabled: boolean;
-  topMarketCap: number;
-  topVolatile: number;
-  refreshHour: number;
-  refreshMinute: number;
-  refreshTimezone: string;
-  minQuoteVolumeUsd: number;
-  lastRefreshAt: string | null;
-  lastRefreshSource: 'boot' | 'schedule' | 'manual' | null;
-  nextRefreshAt: string | null;
-  lastDurationMs: number | null;
-  lastError: string | null;
-  lastSummary: WatchlistAutoSummary | null;
-}
-
-/** Compact 24h ticker for a WEEX-only coin. */
-export interface WeexWatchTicker {
-  price: number;
-  changePercent: number;
-  high: number;
-  low: number;
-  quoteVolume: number;
-}
-
 export interface TelegramBotStatusConfig {
   hasToken: boolean;
   maskedToken: string;
@@ -210,56 +175,6 @@ export const apiClient = {
       `/api/watchlist/${encodeURIComponent(symbol)}`,
       { method: 'DELETE' }
     );
-  },
-
-  async getWatchlistAutoStatus(): Promise<{ status: WatchlistAutoStatus }> {
-    return requestJson<{ status: WatchlistAutoStatus }>('/api/watchlist/auto/status');
-  },
-
-  /** Bases that have a live Binance USDT spot pair (safe websocket streams). */
-  async getBinanceBases(): Promise<{ bases: string[]; source: 'live' | 'unavailable' }> {
-    return requestJson<{ bases: string[]; source: 'live' | 'unavailable' }>(
-      '/api/market/binance-bases'
-    );
-  },
-
-  /** Server-side candles (Binance, then WEEX fallback) for any watchlist coin. */
-  async getMarketKlines(
-    symbol: string,
-    interval: string,
-    limit = 400
-  ): Promise<{ source: 'binance' | 'weex' | 'none'; candles: any[] }> {
-    const qs = new URLSearchParams({ symbol, interval, limit: String(limit) });
-    return requestJson(`/api/market/klines?${qs.toString()}`);
-  },
-
-  /** 24h tickers for coins that only exist on WEEX (demo / SUSDT list). */
-  async getWeexWatchlistTickers(): Promise<{
-    tickers: Record<string, WeexWatchTicker>;
-  }> {
-    return requestJson<{ tickers: Record<string, WeexWatchTicker> }>(
-      '/api/watchlist/weex-tickers'
-    );
-  },
-
-  /** Re-add any missing WEEX demo coins to the watchlist. */
-  async seedWeexDemoWatchlist(): Promise<{
-    ok: boolean;
-    added: number;
-    total: number;
-    totalDemoCoins: number;
-    symbols: WatchlistSymbol[];
-  }> {
-    return requestJson('/api/watchlist/weex-demo/seed', { method: 'POST' });
-  },
-
-  async refreshWatchlistAuto(): Promise<{
-    ok: boolean;
-    summary?: WatchlistAutoSummary;
-    status: WatchlistAutoStatus;
-    symbols: WatchlistSymbol[];
-  }> {
-    return requestJson('/api/watchlist/auto/refresh', { method: 'POST' });
   },
 
   // Telegram Direct Bot API
