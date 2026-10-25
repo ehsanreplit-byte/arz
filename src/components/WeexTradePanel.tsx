@@ -9,6 +9,7 @@ import {
   Gauge,
   History,
   KeyRound,
+  Layers,
   Loader2,
   Pencil,
   Play,
@@ -148,6 +149,56 @@ function StatCard({
       </div>
       <div className={`text-xl font-extrabold font-mono-tabular ${valueTone}`}>{value}</div>
       {hint && <div className="text-[11px] text-slate-500 leading-relaxed">{hint}</div>}
+    </div>
+  );
+}
+
+function WinLossCard({
+  wins,
+  losses,
+}: {
+  wins: number;
+  losses: number;
+  winRate: number;
+}) {
+  const total = wins + losses;
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl p-4 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-slate-500">تعداد سود / تعداد ضرر</span>
+        <Layers className="w-4 h-4 text-slate-400" />
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div className="rounded-lg bg-emerald-50 border border-emerald-100 px-3 py-2">
+          <div className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+            <TrendingUp className="w-3 h-3" />
+            سود (برد)
+          </div>
+          <div className="text-xl font-extrabold font-mono-tabular text-emerald-600">{wins}</div>
+        </div>
+        <div className="rounded-lg bg-red-50 border border-red-100 px-3 py-2">
+          <div className="text-[10px] font-bold text-red-700 flex items-center gap-1">
+            <TrendingDown className="w-3 h-3" />
+            ضرر (باخت)
+          </div>
+          <div className="text-xl font-extrabold font-mono-tabular text-red-600">{losses}</div>
+        </div>
+      </div>
+
+      <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden flex" dir="ltr">
+        <div
+          className="h-full bg-emerald-500"
+          style={{ width: total > 0 ? `${(wins / total) * 100}%` : '0%' }}
+        />
+        <div
+          className="h-full bg-red-500"
+          style={{ width: total > 0 ? `${(losses / total) * 100}%` : '0%' }}
+        />
+      </div>
+      <div className="text-[11px] text-slate-500">
+        از {total} معامله بسته‌شده · نرخ برد {total > 0 ? Math.round((wins / total) * 1000) / 10 : 0}%
+      </div>
     </div>
   );
 }
@@ -919,34 +970,52 @@ export function WeexTradePanel() {
 
       {/* Stats */}
       {stats && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard
-            label={mode === 'live' ? 'موجودی آزاد USDT (صرافی)' : 'موجودی آزاد (مجازی)'}
-            value={fmtUsd(stats.balance)}
-            hint={mode === 'live' ? 'خوانده‌شده از حساب واقعی WEEX' : `سرمایه اولیه: ${fmtUsd(stats.initialBalance)}`}
-            icon={Wallet}
-            tone="accent"
-          />
-          <StatCard
-            label="ارزش خالص حساب"
-            value={fmtUsd(stats.equity)}
-            hint={`مارجین درگیر: ${fmtUsd(stats.usedMargin)}`}
-            icon={Gauge}
-          />
-          <StatCard
-            label="سود/زیان باز"
-            value={fmtUsd(stats.unrealizedPnl)}
-            hint={`${stats.openPositions} پوزیشن باز · ${stats.pendingOrders} سفارش در انتظار`}
-            icon={stats.unrealizedPnl >= 0 ? ArrowUpRight : ArrowDownRight}
-            tone={stats.unrealizedPnl >= 0 ? 'up' : 'down'}
-          />
-          <StatCard
-            label="سود/زیان کل"
-            value={fmtUsd(stats.netPnl)}
-            hint={`${stats.closedTrades} معامله بسته · نرخ برد ${stats.winRate}%`}
-            icon={netUp ? TrendingUp : TrendingDown}
-            tone={netUp ? 'up' : 'down'}
-          />
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard
+              label={mode === 'live' ? 'موجودی آزاد USDT (صرافی)' : 'موجودی آزاد (مجازی)'}
+              value={fmtUsd(stats.balance)}
+              hint={mode === 'live' ? 'خوانده‌شده از حساب واقعی WEEX' : `سرمایه اولیه: ${fmtUsd(stats.initialBalance)}`}
+              icon={Wallet}
+              tone="accent"
+            />
+            <StatCard
+              label="ارزش خالص حساب"
+              value={fmtUsd(stats.equity)}
+              hint={`مارجین درگیر: ${fmtUsd(stats.usedMargin)}`}
+              icon={Gauge}
+            />
+            <StatCard
+              label="سود/زیان باز"
+              value={fmtUsd(stats.unrealizedPnl)}
+              hint={`${stats.openPositions} پوزیشن باز · ${stats.pendingOrders} سفارش در انتظار`}
+              icon={stats.unrealizedPnl >= 0 ? ArrowUpRight : ArrowDownRight}
+              tone={stats.unrealizedPnl >= 0 ? 'up' : 'down'}
+            />
+            <StatCard
+              label="سود/زیان کل"
+              value={fmtUsd(stats.netPnl)}
+              hint={`${stats.closedTrades} معامله بسته · نرخ برد ${stats.winRate}%`}
+              icon={netUp ? TrendingUp : TrendingDown}
+              tone={netUp ? 'up' : 'down'}
+            />
+          </div>
+
+          {/* Closed-trades PnL + win/loss counters */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <StatCard
+              label="سود/زیان پوزیشن‌های بسته‌شده"
+              value={fmtUsd(stats.realizedPnl)}
+              hint={`مجموع ${stats.closedTrades} معامله بسته‌شده · کارمزد پرداخت‌شده: ${fmtUsd(stats.totalFees)}`}
+              icon={stats.realizedPnl >= 0 ? TrendingUp : TrendingDown}
+              tone={stats.realizedPnl >= 0 ? 'up' : 'down'}
+            />
+            <WinLossCard
+              wins={stats.winCount}
+              losses={stats.lossCount}
+              winRate={stats.winRate}
+            />
+          </div>
         </div>
       )}
 
