@@ -69,6 +69,9 @@ export interface WeexPositionView extends IWeexPosition {
   currentPrice: number;
   unrealizedPnl: number;
   unrealizedPnlPct: number;
+  /** PnL that should be displayed: unrealized for OPEN, realized for CLOSED. */
+  displayPnl: number;
+  displayPnlPct: number;
   distanceToEntryPct: number;
   riskRewardRatio: string;
   isLiveOnExchange: boolean;
@@ -2015,6 +2018,14 @@ class WeexEngine {
         unrealizedPnl = pnlFor(p.side, p.entryPrice, currentPrice, p.remainingQuantity);
       }
       const unrealizedPnlPct = p.margin > 0 ? (unrealizedPnl / p.margin) * 100 : 0;
+
+      // Closed positions have no unrealized PnL: the history card must show the
+      // realized result instead, otherwise every closed trade reads 0.00%.
+      const isClosed = p.status === 'CLOSED';
+      const displayPnl = isClosed ? p.realizedPnl : unrealizedPnl;
+      const initialMargin =
+        isClosed && p.notional > 0 && p.leverage > 0 ? p.notional / p.leverage : p.margin;
+      const displayPnlPct = initialMargin > 0 ? (displayPnl / initialMargin) * 100 : 0;
       const distanceToEntryPct =
         p.status === 'PENDING' && currentPrice > 0
           ? ((p.entryTarget - currentPrice) / currentPrice) * 100
@@ -2024,6 +2035,8 @@ class WeexEngine {
         currentPrice,
         unrealizedPnl,
         unrealizedPnlPct: round2(unrealizedPnlPct),
+        displayPnl: round2(displayPnl),
+        displayPnlPct: round2(displayPnlPct),
         distanceToEntryPct: round2(distanceToEntryPct),
         riskRewardRatio: rrText(p),
         isLiveOnExchange: p.mode === 'live' && Boolean(p.exchangePositionId),

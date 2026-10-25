@@ -787,6 +787,9 @@ export interface PositionInfo {
   currentPrice: number;
   unrealizedPnl: number;
   unrealizedPnlPct: number;
+  /** Unrealized for OPEN positions, realized for CLOSED ones. */
+  displayPnl: number;
+  displayPnlPct: number;
   distanceToEntryPct: number;
 }
 
@@ -1149,6 +1152,9 @@ export interface WeexPositionInfo {
   currentPrice: number;
   unrealizedPnl: number;
   unrealizedPnlPct: number;
+  /** Unrealized for OPEN positions, realized for CLOSED ones. */
+  displayPnl: number;
+  displayPnlPct: number;
   distanceToEntryPct: number;
   riskRewardRatio: string;
   isLiveOnExchange: boolean;

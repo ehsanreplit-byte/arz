@@ -183,7 +183,7 @@ function PositionCard({
     setTp2(String(pos.takeProfit2 || ''));
   }, [pos.stopLoss, pos.takeProfit1, pos.takeProfit2]);
 
-  const up = pos.unrealizedPnl >= 0;
+  const up = (pos.displayPnl ?? pos.unrealizedPnl) >= 0;
 
   return (
     <div className="border border-slate-200 rounded-xl p-4 space-y-3 bg-white">
@@ -273,8 +273,10 @@ function PositionCard({
             </div>
           ) : (
             <div className={`font-mono-tabular font-extrabold ${up ? 'text-emerald-600' : 'text-red-600'}`}>
-              {fmtUsd(pos.unrealizedPnl)}{' '}
-              <span className="text-[10px] font-bold">({fmtPct(pos.unrealizedPnlPct)})</span>
+              {fmtUsd(pos.displayPnl ?? pos.unrealizedPnl)}{' '}
+              <span className="text-[10px] font-bold">
+                ({fmtPct(pos.displayPnlPct ?? pos.unrealizedPnlPct)})
+              </span>
             </div>
           )}
         </div>
