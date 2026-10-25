@@ -41,6 +41,8 @@ services:
         value: "1"
       - key: SIGNAL_MIN_SCORE_PCT
         value: "50"
+      - key: SIGNAL_CYCLE_MINUTES
+        value: "30"
       - key: SIGNAL_ALIGN_TO_TIMEFRAME
         value: "true"
       - key: SIGNAL_BOUNDARY_BUFFER_MS

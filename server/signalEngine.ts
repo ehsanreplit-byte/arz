@@ -45,8 +45,17 @@ const BOUNDARY_BUFFER_MS = Math.max(
   0,
   Number(process.env.SIGNAL_BOUNDARY_BUFFER_MS ?? 5000)
 );
+/**
+ * Length of one evaluation cycle in minutes. Independent from the analysis
+ * timeframe: signals are still analysed on SIGNAL_TIMEFRAME (15m), but cycles
+ * fire every SIGNAL_CYCLE_MINUTES (default 30 → :00 and :30 UTC).
+ */
+const CYCLE_MINUTES = Math.max(
+  1,
+  Number(process.env.SIGNAL_CYCLE_MINUTES || 30)
+);
 const CYCLE_INTERVAL_MS = ALIGN_TO_TIMEFRAME
-  ? TIMEFRAME_MINUTES * 60 * 1000
+  ? CYCLE_MINUTES * 60 * 1000
   : Math.max(60_000, Number(process.env.SIGNAL_CYCLE_INTERVAL_MS || 30 * 60 * 1000));
 
 /** Timestamps are computed in UTC but recorded/displayed in this timezone. */
@@ -54,7 +63,7 @@ const REPORT_TIMEZONE = process.env.SIGNAL_TIMEZONE || 'Asia/Tehran';
 
 /** Next UTC boundary of the configured timeframe (+ a few seconds of buffer). */
 function nextUtcBoundary(fromMs: number = Date.now()): number {
-  const step = TIMEFRAME_MINUTES * 60 * 1000;
+  const step = CYCLE_MINUTES * 60 * 1000;
   const boundary = (Math.floor(fromMs / step) + 1) * step;
   return boundary + BOUNDARY_BUFFER_MS;
 }
@@ -128,8 +137,10 @@ export interface SignalEngineState {
   /** symbols analysed per ChatGPT request */
   aiBatchSize: number;
   cycleIntervalMs: number;
-  /** timeframe length that drives the schedule, in minutes */
+  /** analysis timeframe, in minutes */
   timeframeMinutes: number;
+  /** length of one cycle (schedule boundary), in minutes */
+  cycleMinutes: number;
   /** true when cycles are aligned to UTC candle closes */
   alignedToTimeframe: boolean;
   timezone: string;
@@ -635,6 +646,7 @@ class SignalEngine {
     aiBatchSize: AI_BATCH_SIZE,
     cycleIntervalMs: CYCLE_INTERVAL_MS,
     timeframeMinutes: TIMEFRAME_MINUTES,
+    cycleMinutes: CYCLE_MINUTES,
     alignedToTimeframe: ALIGN_TO_TIMEFRAME,
     timezone: REPORT_TIMEZONE,
     lastRunAt: null,
