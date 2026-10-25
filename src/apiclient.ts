@@ -168,7 +168,9 @@ async function requestJson<T>(url: string, options: RequestInit = {}): Promise<T
     if (response.status === 401) {
       tokenStorage.clearToken();
     }
-    throw new Error(data.error || `خطای ارتباط با سرور (${response.status})`);
+    // Some endpoints answer 400 with { ok:false, message } — surface that text
+    // instead of a generic "server error" so the real reason is visible.
+    throw new Error(data.error || data.message || `خطای ارتباط با سرور (${response.status})`);
   }
 
   return data as T;

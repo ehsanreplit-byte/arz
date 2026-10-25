@@ -1298,6 +1298,122 @@ class WeexEngine {
       return { ok: false, message: 'کلید API صرافی برای بستن پوزیشن واقعی ثبت نشده است.' };
     }
     const client = this.signedClient(settings);
+
+    // ---- live PENDING order: cancel the exchange order, not a position ----
+    // A LIMIT order that has not filled yet exists on WEEX as an OPEN ORDER;
+    // closePositions() cannot cancel it, which left the order alive on the
+    // exchange (it could fill later) while the panel showed "cancelled".
+    if (pos.status === 'PENDING') {
+      // Read the real order state first: a "pending" row may already be filled
+      // on the exchange, in which case cancelling is wrong (a position exists).
+      let orderStatus = '';
+      let filledQty = 0;
+      let avgPrice = 0;
+      if (pos.exchangeOrderId) {
+        try {
+          const info: any = await client.getOrder(pos.exchangeOrderId);
+          orderStatus = String(info?.status || '').toUpperCase();
+          filledQty = toNumber(info?.executedQty);
+          avgPrice = toNumber(info?.avgPrice);
+        } catch {
+          /* order may be unknown — fall through to cancel */
+        }
+      }
+
+      if (orderStatus === 'FILLED' && filledQty > 0) {
+        const entry = avgPrice > 0 ? avgPrice : pos.entryTarget;
+        await dbRepo.updateWeexPosition(pos._id, {
+          status: 'OPEN',
+          entryPrice: entry,
+          quantity: filledQty,
+          remainingQuantity: filledQty,
+          notional: round2(filledQty * entry),
+          openedAt: pos.openedAt || new Date().toISOString(),
+          lastPrice: entry,
+          note: 'سفارش در صرافی پر شده بود؛ به پوزیشن باز تبدیل شد.',
+        });
+        return {
+          ok: false,
+          message: 'این سفارش در صرافی WEEX پر شده بود و به پوزیشن باز تبدیل شد؛ اکنون می‌توانید آن را ببندید.',
+        };
+      }
+
+      try {
+        if (pos.exchangeOrderId) {
+          try {
+            await client.cancelOrder({ symbol: pos.symbol, orderId: pos.exchangeOrderId });
+          } catch {
+            // order id may be unknown/expired — fall back to the symbol sweep
+            await client.cancelAllOpenOrders(pos.symbol);
+          }
+        } else {
+          await client.cancelAllOpenOrders(pos.symbol);
+        }
+
+        // Verify on the exchange: cancelling must really remove the order,
+        // otherwise a "cancelled" order could still fill later.
+        if (pos.exchangeOrderId) {
+          try {
+            const info: any = await client.getOrder(pos.exchangeOrderId);
+            const status = String(info?.status || '').toUpperCase();
+            if (status === 'NEW' || status === 'PARTIALLY_FILLED' || status === 'OPEN') {
+              await client.cancelAllOpenOrders(pos.symbol);
+              const again: any = await client.getOrder(pos.exchangeOrderId);
+              const status2 = String(again?.status || '').toUpperCase();
+              if (status2 === 'NEW' || status2 === 'PARTIALLY_FILLED' || status2 === 'OPEN') {
+                return {
+                  ok: false,
+                  message: 'صرافی WEEX سفارش را لغو نکرد (وضعیت سفارش هنوز باز است). دوباره تلاش کنید.',
+                };
+              }
+            }
+          } catch {
+            /* verification is best-effort */
+          }
+        }
+      } catch (err: any) {
+        return {
+          ok: false,
+          message: `لغو سفارش در صرافی WEEX ناموفق بود: ${err?.message || 'خطای صرافی'}`,
+        };
+      }
+
+      try {
+        await client.cancelAlgoOrders(pos.symbol);
+      } catch {
+        /* no protection orders yet */
+      }
+
+      if (filledQty > 0) {
+        // partially filled before the cancel: keep the filled part as a position
+        const entry = avgPrice > 0 ? avgPrice : pos.entryTarget;
+        await dbRepo.updateWeexPosition(pos._id, {
+          status: 'OPEN',
+          entryPrice: entry,
+          quantity: filledQty,
+          remainingQuantity: filledQty,
+          notional: round2(filledQty * entry),
+          openedAt: pos.openedAt || new Date().toISOString(),
+          lastPrice: entry,
+          closeReason: '',
+          note: 'بخش اجراشده سفارش حفظ شد و باقی آن در صرافی لغو شد.',
+        });
+        return {
+          ok: true,
+          message: 'باقی سفارش در صرافی لغو شد؛ بخش اجراشده به‌صورت پوزیشن باز باقی ماند.',
+        };
+      }
+
+      await dbRepo.updateWeexPosition(pos._id, {
+        status: 'CLOSED',
+        remainingQuantity: 0,
+        margin: 0,
+        closeReason: 'لغو سفارش در انتظار ورود (صرافی WEEX)',
+        closedAt: new Date().toISOString(),
+      });
+      return { ok: true, message: 'سفارش در انتظار ورود در صرافی WEEX لغو شد.' };
+    }
+
     try {
       const result = await client.closePositions({ symbol: pos.symbol });
       const failed = result.find((r) => !r.success);

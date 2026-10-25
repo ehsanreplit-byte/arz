@@ -763,12 +763,15 @@ export class WeexClient {
   }
 
   public async cancelOrder(params: {
+    symbol?: string;
     orderId?: string | number;
     origClientOrderId?: string;
   }): Promise<{ success: boolean; orderId?: string }> {
     const data: any = await this.request('DELETE', '/capi/v3/order', {
       auth: true,
       query: {
+        // WEEX requires the symbol together with the order id.
+        symbol: params.symbol,
         orderId: params.orderId,
         origClientOrderId: params.origClientOrderId,
       },
