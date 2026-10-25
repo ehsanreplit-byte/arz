@@ -21,6 +21,11 @@
 import { dbRepo, IRegisteredSignal, IWeexPosition, IWeexSettings } from './models.js';
 import { fetchPrices } from './tradeEngine.js';
 import {
+  isTighterStop,
+  loadTrailingStopConfig,
+  trailingStopPrice,
+} from './trailingStop.js';
+import {
   WeexClient,
   WeexCredentials,
   WeexSymbolRules,
@@ -1109,6 +1114,53 @@ class WeexEngine {
     });
   }
 
+  /**
+   * Trailing-stop ladder (see server/trailingStop.ts):
+   *   ≥6%  → stop to breakeven, ≥10% → lock 5%, then +5% per step.
+   * Only ever tightens the stop. Paper positions are updated locally, live
+   * positions are pushed to WEEX (cancel + re-place the protection orders).
+   */
+  private async applyTrailingStop(pos: IWeexPosition, price: number): Promise<IWeexPosition> {
+    if (pos.status !== 'OPEN' || !(pos.entryPrice > 0)) return pos;
+
+    const config = loadTrailingStopConfig();
+    if (!config.enabled) return pos;
+
+    const decision = trailingStopPrice(pos, price, config);
+    if (!decision.target) return pos;
+    if (!isTighterStop(pos.side, decision.target, pos.stopLoss)) return pos;
+
+    const previous = pos.stopLoss;
+    const note = `${pos.note ? `${pos.note} | ` : ''}${decision.reason}`.slice(-500);
+
+    if (pos.mode === 'paper') {
+      const updated = await dbRepo.updateWeexPosition(pos._id, {
+        stopLoss: decision.target,
+        note,
+      } as Partial<IWeexPosition>);
+      if (updated) {
+        console.log(
+          `[weex] trailing (paper) ${pos.symbol} ${pos.side}: SL ${previous} → ${decision.target}`
+        );
+        return updated;
+      }
+      return pos;
+    }
+
+    const result = await this.updateProtection(pos.userId, pos._id, {
+      stopLoss: decision.target,
+    });
+    if (!result.ok) {
+      console.warn(`[weex] trailing (live) ${pos.symbol} failed: ${result.message}`);
+      return pos;
+    }
+    await dbRepo.updateWeexPosition(pos._id, { note } as Partial<IWeexPosition>);
+    console.log(
+      `[weex] trailing (live) ${pos.symbol} ${pos.side}: SL ${previous} → ${decision.target}`
+    );
+    return result.position ? { ...result.position, note } : pos;
+  }
+
   private async liveFreeMargin(settings: IWeexSettings): Promise<number> {
     try {
       const client = this.signedClient(settings);
@@ -1263,7 +1315,14 @@ class WeexEngine {
     const reference = pos.entryPrice || pos.entryTarget;
     if (levels.stopLoss !== undefined) {
       const sl = Number(levels.stopLoss);
-      const valid = pos.side === 'LONG' ? sl > 0 && sl < reference : sl > reference;
+      // A break-even / trailing stop legitimately sits ABOVE the entry for a
+      // LONG (below it for a SHORT). Validate against the live price instead of
+      // the entry, so the trailing-stop engine can push the stop into profit.
+      const market = pos.lastPrice > 0 ? pos.lastPrice : reference;
+      const valid =
+        pos.side === 'LONG'
+          ? Number.isFinite(sl) && sl > 0 && sl < market
+          : Number.isFinite(sl) && sl > market;
       if (!valid) {
         return {
           ok: false,
@@ -1579,7 +1638,7 @@ class WeexEngine {
       const prices = await this.getPrices(active.map((p) => p.symbol));
 
       // ---- paper ----
-      for (const pos of active.filter((p) => p.mode === 'paper')) {
+      for (let pos of active.filter((p) => p.mode === 'paper')) {
         const price = prices[pos.symbol];
         if (!price) continue;
         if (pos.status === 'PENDING') {
@@ -1618,6 +1677,9 @@ class WeexEngine {
         }
 
         if (pos.status !== 'OPEN') continue;
+
+        // ---- trailing stop: move the stop as the trade moves into profit ----
+        pos = await this.applyTrailingStop(pos, price);
 
         const settings = await dbRepo.getWeexSettings(pos.userId);
         const slHit =
@@ -1669,7 +1731,7 @@ class WeexEngine {
           const exchangePositions = await client.positions();
           summary.synced += positions.length;
 
-          for (const pos of positions) {
+          for (let pos of positions) {
             if (pos.status === 'PENDING') {
               if (!pos.exchangeOrderId) continue;
               try {
@@ -1734,6 +1796,15 @@ class WeexEngine {
               if (Object.keys(patch).length > 0) {
                 await dbRepo.updateWeexPosition(pos._id, patch);
               }
+
+              // ---- trailing stop (live): tighten the exchange-side stop ----
+              if (exchangePos.size > 0) {
+                const livePrice = prices[pos.symbol] || pos.lastPrice || 0;
+                if (livePrice > 0) {
+                  pos = await this.applyTrailingStop({ ...pos, ...patch } as IWeexPosition, livePrice);
+                }
+              }
+
               // TP1 is not attached to the exchange order (TP2 is), so the
               // engine closes the configured share with a reduce-only MARKET
               // order once the price reaches TP1.
