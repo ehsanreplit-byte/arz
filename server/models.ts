@@ -262,6 +262,28 @@ export interface IWeexPosition {
   updatedAt: string;
 }
 
+/** One row of the trailing-stop audit log ("حد سود شناور"). */
+export interface ITrailingStopEvent {
+  _id: string;
+  positionId: string;
+  userId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  mode: 'paper' | 'live';
+  environment: string;
+  entryPrice: number;
+  marketPrice: number;
+  /** Profit percentage that triggered the move (ROE on margin by default). */
+  profitPct: number;
+  /** Percentage of profit the new stop locks in (0 = breakeven). */
+  lockPct: number;
+  previousStop: number;
+  newStop: number;
+  reason: string;
+  createdAt: string;
+}
+
 const WeexSettingsSchema = new Schema<IWeexSettings & Document>({
   userId: { type: String, required: true, unique: true, index: true },
   mode: { type: String, enum: ['paper', 'live'], default: 'paper' },
@@ -332,6 +354,28 @@ export const WeexSettingsModel =
 export const WeexPositionModel =
   mongoose.models.WeexPosition ||
   mongoose.model<IWeexPosition & Document>('WeexPosition', WeexPositionSchema);
+
+const TrailingStopEventSchema = new Schema<ITrailingStopEvent & Document>({
+  positionId: { type: String, default: '', index: true },
+  userId: { type: String, default: '', index: true },
+  symbol: { type: String, required: true, index: true },
+  label: { type: String, default: '' },
+  side: { type: String, enum: ['LONG', 'SHORT'], required: true },
+  mode: { type: String, enum: ['paper', 'live'], default: 'paper' },
+  environment: { type: String, default: 'production' },
+  entryPrice: { type: Number, default: 0 },
+  marketPrice: { type: Number, default: 0 },
+  profitPct: { type: Number, default: 0 },
+  lockPct: { type: Number, default: 0 },
+  previousStop: { type: Number, default: 0 },
+  newStop: { type: Number, default: 0 },
+  reason: { type: String, default: '' },
+  createdAt: { type: String, default: () => new Date().toISOString(), index: true },
+});
+
+export const TrailingStopEventModel =
+  mongoose.models.TrailingStopEvent ||
+  mongoose.model<ITrailingStopEvent & Document>('TrailingStopEvent', TrailingStopEventSchema);
 
 // ============================================================================
 // Small persistent counters (e.g. total signal evaluations)
@@ -541,6 +585,7 @@ interface PersistentStoreData {
   positions?: IPosition[];
   weexSettings?: IWeexSettings[];
   weexPositions?: IWeexPosition[];
+  trailingStopEvents?: ITrailingStopEvent[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -698,6 +743,9 @@ class DatabaseEngine {
           positions: Array.isArray(parsed.positions) ? parsed.positions : [],
           weexSettings: Array.isArray(parsed.weexSettings) ? parsed.weexSettings : [],
           weexPositions: Array.isArray(parsed.weexPositions) ? parsed.weexPositions : [],
+          trailingStopEvents: Array.isArray(parsed.trailingStopEvents)
+            ? parsed.trailingStopEvents
+            : [],
         };
         if (updatedStore.avalaiConfig && (!updatedStore.avalaiConfig.apiKey || updatedStore.avalaiConfig.apiKey === '')) {
           updatedStore.avalaiConfig.apiKey = 'aa-u0S6Ls0H00KMvWJrthbwwYMWRUzmtCCL8R1IKXK6W2KepJTw';
@@ -757,6 +805,7 @@ class DatabaseEngine {
       positions: [],
       weexSettings: [],
       weexPositions: [],
+      trailingStopEvents: [],
     };
     this.saveDiskStore(initialStore);
     return initialStore;
@@ -1122,6 +1171,15 @@ class DatabaseEngine {
           this.store.weexPositions || [],
           (p) => ({ _id: p._id }),
           'weex positions'
+        );
+      }
+
+      if ((await TrailingStopEventModel.countDocuments()) === 0) {
+        await bulkUpsert(
+          TrailingStopEventModel,
+          this.store.trailingStopEvents || [],
+          (e) => ({ _id: e._id }),
+          'trailing stop events'
         );
       }
 
@@ -2409,6 +2467,77 @@ class DatabaseEngine {
     }
     this.saveDiskStore();
     return created;
+  }
+
+  // ==========================================================================
+  // Trailing stop audit log ("حد سود شناور")
+  // ==========================================================================
+  public async addTrailingStopEvent(
+    event: Omit<ITrailingStopEvent, '_id' | 'createdAt'> & { createdAt?: string }
+  ): Promise<ITrailingStopEvent> {
+    const created: ITrailingStopEvent = {
+      ...event,
+      _id: generateObjectId(),
+      createdAt: event.createdAt || new Date().toISOString(),
+    };
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const { _id, ...payload } = created;
+        await TrailingStopEventModel.create({ ...payload, _id });
+      } catch (err: any) {
+        console.warn('[db] trailing stop event not stored in MongoDB:', err?.message || err);
+      }
+    }
+
+    if (!Array.isArray(this.store.trailingStopEvents)) this.store.trailingStopEvents = [];
+    this.store.trailingStopEvents.unshift(created);
+    // Keep the audit log bounded (newest first).
+    if (this.store.trailingStopEvents.length > 5000) {
+      this.store.trailingStopEvents = this.store.trailingStopEvents.slice(0, 5000);
+    }
+    this.saveDiskStore();
+    return created;
+  }
+
+  public async getTrailingStopEvents(limit = 300): Promise<ITrailingStopEvent[]> {
+    const max = Math.min(2000, Math.max(1, limit));
+    const byId = new Map<string, ITrailingStopEvent>();
+    const disk = Array.isArray(this.store.trailingStopEvents) ? this.store.trailingStopEvents : [];
+    for (const e of disk) byId.set(e._id, e);
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        const docs = await TrailingStopEventModel.find().sort({ createdAt: -1 }).limit(max).lean();
+        for (const d of docs) {
+          const row = { ...(d as any), _id: String(d._id) } as ITrailingStopEvent;
+          byId.set(row._id, row);
+        }
+      } catch {
+        /* fall back to the disk mirror */
+      }
+    }
+
+    return [...byId.values()]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, max);
+  }
+
+  public async clearTrailingStopEvents(): Promise<number> {
+    const removed = Array.isArray(this.store.trailingStopEvents)
+      ? this.store.trailingStopEvents.length
+      : 0;
+    this.store.trailingStopEvents = [];
+    this.saveDiskStore();
+
+    if (this.isMongoConnected && mongoose.connection.readyState === 1) {
+      try {
+        await TrailingStopEventModel.deleteMany({});
+      } catch {
+        /* ignore */
+      }
+    }
+    return removed;
   }
 
   public async updateWeexPosition(

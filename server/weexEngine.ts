@@ -1115,6 +1115,46 @@ class WeexEngine {
   }
 
   /**
+   * Persists one trailing-stop move so the "حد سود شناور" page can show the
+   * full audit trail (old stop → new stop, profit and locked percentage).
+   */
+  private async recordTrailingMove(
+    pos: IWeexPosition,
+    price: number,
+    decision: { profitPct: number; lockPct: number; target: number | null; reason: string },
+    previousStop: number
+  ): Promise<void> {
+    try {
+      let environment = 'production';
+      try {
+        const settings = await dbRepo.getWeexSettings(pos.userId);
+        environment = settings.environment || 'production';
+      } catch {
+        /* keep default */
+      }
+
+      await dbRepo.addTrailingStopEvent({
+        positionId: pos._id,
+        userId: pos.userId,
+        symbol: pos.symbol,
+        label: pos.label || pos.symbol,
+        side: pos.side,
+        mode: pos.mode,
+        environment,
+        entryPrice: pos.entryPrice,
+        marketPrice: price,
+        profitPct: round2(decision.profitPct),
+        lockPct: decision.lockPct,
+        previousStop,
+        newStop: decision.target || 0,
+        reason: decision.reason,
+      });
+    } catch (err: any) {
+      console.warn('[weex] could not record trailing stop move:', err?.message || err);
+    }
+  }
+
+  /**
    * Trailing-stop ladder (see server/trailingStop.ts):
    *   ≥6%  → stop to breakeven, ≥10% → lock 5%, then +5% per step.
    * Only ever tightens the stop. Paper positions are updated locally, live
@@ -1142,6 +1182,7 @@ class WeexEngine {
         console.log(
           `[weex] trailing (paper) ${pos.symbol} ${pos.side}: SL ${previous} → ${decision.target}`
         );
+        await this.recordTrailingMove(updated, price, decision, previous);
         return updated;
       }
       return pos;
@@ -1158,6 +1199,7 @@ class WeexEngine {
     console.log(
       `[weex] trailing (live) ${pos.symbol} ${pos.side}: SL ${previous} → ${decision.target}`
     );
+    await this.recordTrailingMove(pos, price, decision, previous);
     return result.position ? { ...result.position, note } : pos;
   }
 

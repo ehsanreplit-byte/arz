@@ -21,6 +21,46 @@ export interface WatchlistSymbol {
   createdAt: string;
 }
 
+/** One trailing-stop move recorded by the WEEX engine. */
+export interface TrailingStopEventInfo {
+  _id: string;
+  positionId: string;
+  userId: string;
+  symbol: string;
+  label: string;
+  side: 'LONG' | 'SHORT';
+  mode: 'paper' | 'live';
+  environment: string;
+  entryPrice: number;
+  marketPrice: number;
+  profitPct: number;
+  lockPct: number;
+  previousStop: number;
+  newStop: number;
+  reason: string;
+  createdAt: string;
+}
+
+export interface TrailingStopConfigInfo {
+  enabled: boolean;
+  basis: 'roe' | 'price';
+  breakevenAt: number;
+  firstLockAt: number;
+  step: number;
+}
+
+export interface TrailingStopSummaryInfo {
+  config: TrailingStopConfigInfo;
+  stats: {
+    totalMoves: number;
+    todayMoves: number;
+    positionsProtected: number;
+    liveMoves: number;
+    paperMoves: number;
+    lastMoveAt: string | null;
+  };
+}
+
 export interface TelegramBotStatusConfig {
   hasToken: boolean;
   maskedToken: string;
@@ -564,6 +604,22 @@ export const apiClient = {
     return requestJson<WeexConnectionTestResult>('/api/weex/test', {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  },
+
+  async getTrailingStopSummary(): Promise<TrailingStopSummaryInfo> {
+    return requestJson<TrailingStopSummaryInfo>('/api/trailing-stop/summary');
+  },
+
+  async getTrailingStopEvents(limit = 300): Promise<{ events: TrailingStopEventInfo[] }> {
+    return requestJson<{ events: TrailingStopEventInfo[] }>(
+      `/api/trailing-stop/events?limit=${encodeURIComponent(String(limit))}`
+    );
+  },
+
+  async clearTrailingStopEvents(): Promise<{ ok: boolean; removed: number }> {
+    return requestJson<{ ok: boolean; removed: number }>('/api/trailing-stop/events', {
+      method: 'DELETE',
     });
   },
 

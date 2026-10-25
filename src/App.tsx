@@ -42,6 +42,7 @@ import { SignalsPanel } from './components/SignalsPanel';
 import { AccountPanel } from './components/AccountPanel';
 import { TradePanel } from './components/TradePanel';
 import { WeexTradePanel } from './components/WeexTradePanel';
+import { TrailingStopPanel } from './components/TrailingStopPanel';
 
 type ActiveMenu =
   | 'dashboard'
@@ -49,6 +50,7 @@ type ActiveMenu =
   | 'signals'
   | 'trade'
   | 'weex'
+  | 'trailing'
   | 'account'
   | 'telegram'
   | 'chatgpt'
@@ -260,6 +262,7 @@ export default function App() {
     { id: 'signals', label: 'سیگنال‌ها', icon: Activity },
     { id: 'trade', label: 'ترید', icon: Target },
     { id: 'weex', label: 'ترید WEEX', icon: Zap },
+    { id: 'trailing', label: 'حد سود شناور', icon: TrendingUp },
     { id: 'account', label: 'حساب کاربری', icon: Wallet },
     {
       id: 'telegram',
@@ -720,6 +723,9 @@ export default function App() {
 
           {/* View 2E: WEEX Futures Trading (ترید WEEX) */}
           {activeMenu === 'weex' && <WeexTradePanel />}
+
+          {/* View 2E: Trailing stop audit log (حد سود شناور) */}
+          {activeMenu === 'trailing' && <TrailingStopPanel />}
 
           {/* View 3: Direct Telegram Bot Connection & Message Inbox */}
           {activeMenu === 'telegram' && <TelegramBotManager tickers={tickers} />}

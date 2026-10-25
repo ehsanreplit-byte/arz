@@ -10,6 +10,7 @@ import { dbRepo } from './server/models.js';
 import { telegramWorker } from './server/telegramWorker.js';
 import { signalEngine } from './server/signalEngine.js';
 import { weexEngine } from './server/weexEngine.js';
+import { loadTrailingStopConfig } from './server/trailingStop.js';
 import {
   tradeEngine,
   fetchPrices,
@@ -3135,6 +3136,51 @@ Return ONLY valid JSON (no markdown fences) with this exact structure in Persian
       res.json({ ok: true, summary, engine: weexEngine.getState() });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'خطا در اجرای موتور WEEX' });
+    }
+  });
+
+  // ==========================================================================
+  // Trailing stop ("حد سود شناور") — audit log + configuration
+  // ==========================================================================
+  app.get('/api/trailing-stop/summary', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const config = loadTrailingStopConfig();
+      const events = await dbRepo.getTrailingStopEvents(2000);
+      const today = new Date().toISOString().slice(0, 10);
+      const todayEvents = events.filter((e) => String(e.createdAt).slice(0, 10) === today);
+      const positions = new Set(events.map((e) => e.positionId).filter(Boolean));
+
+      res.json({
+        config,
+        stats: {
+          totalMoves: events.length,
+          todayMoves: todayEvents.length,
+          positionsProtected: positions.size,
+          liveMoves: events.filter((e) => e.mode === 'live').length,
+          paperMoves: events.filter((e) => e.mode === 'paper').length,
+          lastMoveAt: events[0]?.createdAt || null,
+        },
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن وضعیت حد سود شناور' });
+    }
+  });
+
+  app.get('/api/trailing-stop/events', authMiddleware, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 300));
+      res.json({ events: await dbRepo.getTrailingStopEvents(limit) });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در خواندن گزارش حد سود شناور' });
+    }
+  });
+
+  app.delete('/api/trailing-stop/events', authMiddleware, async (_req: AuthenticatedRequest, res: Response) => {
+    try {
+      const removed = await dbRepo.clearTrailingStopEvents();
+      res.json({ ok: true, removed });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'خطا در پاک‌سازی گزارش' });
     }
   });
 
