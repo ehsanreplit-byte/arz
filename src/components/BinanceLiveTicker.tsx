@@ -167,10 +167,10 @@ export function BinanceMarketPage({
             <p className="text-xs text-slate-500">از فرم بالا یک نماد جدید مانند BTCUSDT اضافه کنید.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto touch-pan-x">
+          <div className="overflow-auto overscroll-contain max-h-[68vh] sm:max-h-[62vh]">
             <table className="w-full text-right border-collapse block sm:table">
               <thead className="hidden sm:table-header-group">
-                <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-500">
+                <tr className="border-b border-slate-200 bg-slate-50 text-xs font-semibold text-slate-500 sm:sticky sm:top-0 z-10">
                   <th className="py-3 px-2 sm:px-6">نام و نماد ارز</th>
                   <th className="py-3 px-2 sm:px-4 text-left">قیمت لحظه‌ای (USDT)</th>
                   <th className="py-3 px-2 sm:px-4 text-left">تغییر ۲۴ ساعته (%)</th>
