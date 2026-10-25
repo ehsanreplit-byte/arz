@@ -101,6 +101,17 @@ export default function App() {
     void checkSession();
   }, []);
 
+  // Lock background scrolling while the mobile drawer is open so the panel
+  // never shifts underneath the user.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mobileMenuOpen]);
+
   // 2. Load Watchlist Symbols & Telegram Summary when logged in
   useEffect(() => {
     if (!user) return;
@@ -356,18 +367,21 @@ export default function App() {
 
       {/* 2. Mobile Right-Side Hamburger Drawer (منوی همبرگری کشویی از سمت راست در موبایل) */}
       {mobileMenuOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
+        <div className="fixed inset-0 z-50 lg:hidden">
           {/* Backdrop Scrim */}
           <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+            className="absolute inset-0 bg-slate-900/40 backdrop-blur-xs"
             onClick={() => setMobileMenuOpen(false)}
           />
 
           {/* Drawer Panel Anchored to Right */}
-          <aside className="relative mr-0 ml-auto w-[280px] max-w-[85vw] bg-white h-full border-l border-slate-200 p-4 flex flex-col justify-between z-10 shadow-xl">
-            <div className="space-y-5">
-              {/* Mobile Drawer Top Header with Close Button */}
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+          <aside
+            className="absolute top-0 bottom-0 right-0 w-[280px] max-w-[85vw] bg-white border-l border-slate-200 flex flex-col z-10 shadow-2xl h-[100dvh] max-h-[100dvh] animate-drawer-in"
+            dir="rtl"
+          >
+            {/* Mobile Drawer Top Header with Close Button (always visible) */}
+            <div className="shrink-0 p-4 pb-3 border-b border-slate-200">
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <span className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center shrink-0">
                     <ShieldCheck className="w-4 h-4" />
@@ -383,7 +397,10 @@ export default function App() {
                   <X className="w-5 h-5" />
                 </button>
               </div>
+            </div>
 
+            {/* Scrollable area: profile + navigation */}
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-4 space-y-5">
               {/* Admin Profile Summary */}
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1">
                 <div className="text-xs font-bold text-slate-900 truncate">{user.name}</div>
@@ -431,8 +448,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* Bottom Logout Button */}
-            <div className="pt-4 border-t border-slate-200">
+            {/* Bottom Logout Button (pinned, never scrolls away) */}
+            <div className="shrink-0 p-4 pt-3 border-t border-slate-200 bg-white pb-[max(0.75rem,env(safe-area-inset-bottom))]">
               <button
                 type="button"
                 onClick={handleLogout}
