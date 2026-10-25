@@ -23,7 +23,6 @@
  */
 
 import { dbRepo, IPosition, IPositionFill, IRegisteredSignal, ITradeAccount } from './models.js';
-import { WeexClient } from './weexClient.js';
 
 const POLL_INTERVAL_MS = Math.max(3000, Number(process.env.TRADE_POLL_INTERVAL_MS || 10000));
 const DEFAULT_LEVERAGE = Math.max(1, Number(process.env.TRADE_LEVERAGE || 5));
@@ -33,6 +32,29 @@ const SIGNAL_MAX_AGE_MS = Math.max(
   Number(process.env.TRADE_SIGNAL_MAX_AGE_MS || 35 * 60 * 1000)
 );
 const MIN_MARGIN_USD = Number(process.env.TRADE_MIN_MARGIN_USD || 1);
+/**
+ * Maximum allowed distance between the entry and the stop loss, in percent.
+ * Wider stops are pulled back to this distance (10% by default) so a single
+ * trade can never risk more than that much of the price move.
+ */
+const MAX_STOP_DISTANCE_PCT = Math.max(
+  0.1,
+  Number(process.env.TRADE_MAX_STOP_PCT || 10)
+);
+
+/** Caps an over-wide stop loss at `MAX_STOP_DISTANCE_PCT` from the entry. */
+function capStopLoss(side: 'LONG' | 'SHORT', entry: number, stopLoss: number): number {
+  if (!(entry > 0) || !(stopLoss > 0)) return stopLoss;
+  const maxDistance = (entry * MAX_STOP_DISTANCE_PCT) / 100;
+  if (side === 'LONG' && entry - stopLoss > maxDistance) {
+    return Math.round((entry - maxDistance) * 1e8) / 1e8;
+  }
+  if (side === 'SHORT' && stopLoss - entry > maxDistance) {
+    return Math.round((entry + maxDistance) * 1e8) / 1e8;
+  }
+  return stopLoss;
+}
+
 /**
  * Which entries are allowed.
  *  - 'pullback' (default): only take entries that require the price to come
@@ -133,21 +155,31 @@ export async function fetchPrices(symbols: string[]): Promise<Record<string, num
     }
   }
 
-  // ---- WEEX fallback ----
-  // Demo positions can also be opened for WEEX-only symbols. A Binance batch
-  // request fails completely when one symbol is unknown, so fill every missing
-  // price from the WEEX ticker instead.
-  const missing = symbols.filter((s) => !out[String(s).toUpperCase()]);
-  if (missing.length > 0) {
-    try {
-      const tickers = await new WeexClient().ticker24h();
-      for (const t of tickers) {
-        if (t.symbol && t.lastPrice > 0) out[t.symbol] = t.lastPrice;
+  // A batch request fails completely when ONE symbol is unknown to Binance
+  // (e.g. a WEEX-only coin). Retry individually so the known symbols still get
+  // a price — still Binance-only, no other exchange is consulted.
+  if (Object.keys(out).length === 0 && symbols.length > 1) {
+    for (const symbol of symbols) {
+      const upper = String(symbol).toUpperCase();
+      for (const base of ['https://data-api.binance.vision', 'https://api.binance.com']) {
+        try {
+          const res = await fetch(
+            `${base}/api/v3/ticker/price?symbol=${encodeURIComponent(upper)}`
+          );
+          if (!res.ok) continue;
+          const row: any = await res.json();
+          const price = parseFloat(row?.price);
+          if (Number.isFinite(price) && price > 0) {
+            out[upper] = price;
+            break;
+          }
+        } catch {
+          /* try the next host / symbol */
+        }
       }
-    } catch {
-      /* no WEEX prices either */
     }
   }
+
   return out;
 }
 
@@ -361,7 +393,7 @@ class TradeEngine {
           triggerAbove,
           entryTarget: signal.entryPrice,
           entryPrice: 0,
-          stopLoss: signal.stopLoss,
+          stopLoss: capStopLoss(side, signal.entryPrice, signal.stopLoss),
           takeProfit1: signal.takeProfit1,
           takeProfit2: signal.takeProfit2,
           quantity,

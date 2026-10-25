@@ -40,6 +40,24 @@ const PRICE_CACHE_MS = 8_000;
 const SIGNAL_CACHE_MS = 30_000;
 const SIGNAL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MIN_MARGIN_USD = 1;
+/**
+ * Maximum distance between entry and stop loss (percent of price). Wider stops
+ * are tightened to this distance so a single trade never risks more.
+ */
+const MAX_STOP_DISTANCE_PCT = Math.max(0.1, Number(process.env.TRADE_MAX_STOP_PCT || 10));
+
+function capStopLoss(side: 'LONG' | 'SHORT', entry: number, stopLoss: number): number {
+  if (!(entry > 0) || !(stopLoss > 0)) return stopLoss;
+  const maxDistance = (entry * MAX_STOP_DISTANCE_PCT) / 100;
+  if (side === 'LONG' && entry - stopLoss > maxDistance) {
+    return Math.round((entry - maxDistance) * 1e8) / 1e8;
+  }
+  if (side === 'SHORT' && stopLoss - entry > maxDistance) {
+    return Math.round((entry + maxDistance) * 1e8) / 1e8;
+  }
+  return stopLoss;
+}
+
 const MAX_OPEN_POSITIONS = 20;
 
 // ---------------------------------------------------------------------------
@@ -303,28 +321,18 @@ class WeexEngine {
     const out: Record<string, number> = {};
     if (symbols.length === 0) return out;
 
+    // Prices are read from Binance ONLY (single source of truth for entries,
+    // PnL and stop/TP evaluation).
     try {
-      const client = new WeexClient();
-      const tickers = await client.ticker24h();
-      for (const t of tickers) {
-        if (t.symbol && t.lastPrice > 0) out[t.symbol] = t.lastPrice;
+      const fromBinance = await fetchPrices(symbols);
+      for (const [symbol, price] of Object.entries(fromBinance)) {
+        if (price > 0) out[symbol.toUpperCase()] = price;
       }
       if (Object.keys(out).length > 0) {
-        this.state.priceSource = 'weex';
-      }
-    } catch (err: any) {
-      this.state.lastError = `قیمت WEEX در دسترس نیست: ${err?.message || 'network'}`;
-    }
-
-    const missing = symbols.filter((s) => !out[s.toUpperCase()] || out[s.toUpperCase()] <= 0);
-    if (missing.length > 0) {
-      const fromBinance = await fetchPrices(missing);
-      for (const [symbol, price] of Object.entries(fromBinance)) {
-        if (!out[symbol] || out[symbol] <= 0) out[symbol] = price;
-      }
-      if (Object.keys(fromBinance).length > 0 && this.state.priceSource !== 'weex') {
         this.state.priceSource = 'binance';
       }
+    } catch (err: any) {
+      this.state.lastError = `قیمت بایننس در دسترس نیست: ${err?.message || 'network'}`;
     }
 
     this.priceCache = new Map(Object.entries(out).map(([k, v]) => [k.toUpperCase(), v]));
@@ -618,7 +626,7 @@ class WeexEngine {
       Math.max(1, Math.round(Number(input.leverage || settings.leverage) || settings.leverage))
     );
 
-    const stopLoss = Number(input.stopLoss) || 0;
+    const stopLoss = capStopLoss(side, entryTarget, Number(input.stopLoss) || 0);
     const takeProfit1 = Number(input.takeProfit1) || 0;
     const takeProfit2 = Number(input.takeProfit2) || 0;
     if (stopLoss <= 0 || takeProfit1 <= 0) {

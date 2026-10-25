@@ -35,6 +35,12 @@ services:
         value: "3"
       - key: TRADE_ENTRIES_MODE
         value: "pullback"
+      - key: TRADE_MAX_STOP_PCT
+        value: "10"
+      - key: SIGNAL_AI_BATCH_SIZE
+        value: "1"
+      - key: SIGNAL_MIN_SCORE_PCT
+        value: "50"
       - key: SIGNAL_CYCLE_INTERVAL_MS
         value: "1800000"
       # ---- Trailing stop (حد سود شناور) ----

@@ -33,6 +33,8 @@ const REQUEST_GAP_MS = Math.max(
 const SIGNAL_TIMEFRAME = (process.env.SIGNAL_TIMEFRAME || '15m').trim();
 const HTF_TIMEFRAME = (process.env.SIGNAL_HTF_TIMEFRAME || '1h').trim();
 const MIN_CONSENSUS = Math.max(1, Number(process.env.SIGNAL_MIN_CONSENSUS || 3));
+/** Minimum average technical score (0-100) for a signal to be qualified. */
+const MIN_SCORE_PCT = Math.min(100, Math.max(0, Number(process.env.SIGNAL_MIN_SCORE_PCT ?? 50)));
 const AI_ENABLED = process.env.SIGNAL_AI_ENABLED !== 'false';
 const AI_TIMEOUT_MS = Number(process.env.SIGNAL_AI_TIMEOUT_MS || 40_000);
 /**
@@ -40,7 +42,7 @@ const AI_TIMEOUT_MS = Number(process.env.SIGNAL_AI_TIMEOUT_MS || 40_000);
  * one request per symbol down to one request per batch, so the whole cycle is
  * much faster. 1 disables batching.
  */
-const AI_BATCH_SIZE = Math.max(1, Number(process.env.SIGNAL_AI_BATCH_SIZE || 3));
+const AI_BATCH_SIZE = Math.max(1, Number(process.env.SIGNAL_AI_BATCH_SIZE || 1));
 const RUN_ON_BOOT = process.env.SIGNAL_RUN_ON_BOOT === 'true';
 
 export interface SignalCycleSymbolResult {
@@ -166,32 +168,6 @@ async function fetchKlines(
     } catch {
       // try the next endpoint
     }
-  }
-
-  // ---- WEEX fallback (symbols listed on WEEX but not on Binance) ----
-  try {
-    const url = `https://api-contract.weex.com/capi/v3/market/klines?symbol=${encodeURIComponent(
-      symbol
-    )}&interval=${encodeURIComponent(interval)}&limit=${Math.min(1000, Math.max(limit, 100))}`;
-    const res = await fetch(url);
-    if (res.ok) {
-      const arr = await res.json();
-      if (Array.isArray(arr) && arr.length >= 30) {
-        const candles = arr.map((k: any) => ({
-          time: Number(k[0]),
-          open: parseFloat(k[1]),
-          high: parseFloat(k[2]),
-          low: parseFloat(k[3]),
-          close: parseFloat(k[4]),
-          volume: parseFloat(k[5]),
-        }));
-        // WEEX is not guaranteed to be chronological — normalise it.
-        candles.sort((a, b) => a.time - b.time);
-        return candles;
-      }
-    }
-  } catch {
-    /* no WEEX candles either */
   }
 
   return [];
@@ -869,7 +845,11 @@ class SignalEngine {
           const sellSignalsCount = votes.filter((d) => d === 'SHORT').length;
           const totalSignalsChecked = votes.length;
           const matchedSignalsCount = Math.max(buySignalsCount, sellSignalsCount);
-          const isQualified = matchedSignalsCount >= MIN_CONSENSUS;
+          const avgScore =
+            breakdown.reduce((acc, s) => acc + (Number(s.score) || 0), 0) /
+            Math.max(1, breakdown.length);
+          const scoreOk = avgScore >= MIN_SCORE_PCT;
+          const isQualified = matchedSignalsCount >= MIN_CONSENSUS && scoreOk;
           const consensusDirection: 'LONG' | 'SHORT' | 'NO TRADE' =
             buySignalsCount === sellSignalsCount
               ? 'NO TRADE'
@@ -963,11 +943,18 @@ class SignalEngine {
             takeProfit2 = Number(primary?.takeProfit2) || 0;
           }
 
-          result.levelsAveragedFrom = levelsValid ? agreeing.length : 0;
-          const avgScore =
-            breakdown.reduce((acc, s) => acc + (Number(s.score) || 0), 0) /
-            Math.max(1, breakdown.length);
+          // ---- cap an over-wide stop loss at 10% of the entry price ----
+          const maxStopPct = Math.max(0.1, Number(process.env.TRADE_MAX_STOP_PCT || 10));
+          if (entryPrice > 0 && stopLoss > 0) {
+            const maxDistance = (entryPrice * maxStopPct) / 100;
+            if (consensusDirection === 'LONG' && entryPrice - stopLoss > maxDistance) {
+              stopLoss = Math.round((entryPrice - maxDistance) * 1e8) / 1e8;
+            } else if (consensusDirection === 'SHORT' && stopLoss - entryPrice > maxDistance) {
+              stopLoss = Math.round((entryPrice + maxDistance) * 1e8) / 1e8;
+            }
+          }
 
+          result.levelsAveragedFrom = levelsValid ? agreeing.length : 0;
           const payload: Omit<IRegisteredSignal, '_id' | 'createdAt'> = {
             symbol,
             label: result.label,
