@@ -37,13 +37,14 @@ services:
         value: "pullback"
       - key: SIGNAL_CYCLE_INTERVAL_MS
         value: "1800000"
-      - key: WATCHLIST_AUTO_REFRESH
+      # ---- Trailing stop (حد سود شناور) ----
+      - key: WEEX_TRAILING_STOP
         value: "true"
-      - key: WATCHLIST_TOP_MARKETCAP
-        value: "30"
-      - key: WATCHLIST_TOP_VOLATILE
-        value: "20"
-      - key: WATCHLIST_REFRESH_HOUR
-        value: "8"
-      - key: WATCHLIST_REFRESH_TZ
-        value: "Asia/Tehran"
+      - key: WEEX_TRAIL_BASIS
+        value: roe
+      - key: WEEX_TRAIL_BREAKEVEN_PCT
+        value: "6"
+      - key: WEEX_TRAIL_FIRST_LOCK_PCT
+        value: "10"
+      - key: WEEX_TRAIL_STEP_PCT
+        value: "5"
