@@ -288,7 +288,7 @@ export function SignalsPanel() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:shrink-0">
             <button
               type="button"
               onClick={handleToggleScheduler}
@@ -307,7 +307,7 @@ export function SignalsPanel() {
               type="button"
               onClick={handleRunNow}
               disabled={actionBusy || isRunning}
-              className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              className="px-2.5 sm:px-3.5 py-2 text-[11px] sm:text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
               {isRunning ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />

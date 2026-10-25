@@ -168,29 +168,32 @@ export function BinanceMarketPage({
           </div>
         ) : (
           <div className="overflow-x-auto touch-pan-x">
-            <table className="w-full text-right border-collapse min-w-[600px] sm:min-w-full">
-              <thead>
+            <table className="w-full text-right border-collapse block sm:table">
+              <thead className="hidden sm:table-header-group">
                 <tr className="border-b border-slate-200 bg-slate-50/70 text-xs font-semibold text-slate-500">
-                  <th className="py-3.5 px-3 sm:px-6">نام و نماد ارز</th>
-                  <th className="py-3.5 px-3 sm:px-4 text-left">قیمت لحظه‌ای (USDT)</th>
-                  <th className="py-3.5 px-3 sm:px-4 text-left">تغییر ۲۴ ساعته (%)</th>
-                  <th className="py-3.5 px-3 sm:px-6 text-left">عملیات</th>
+                  <th className="py-3 px-2 sm:px-6">نام و نماد ارز</th>
+                  <th className="py-3 px-2 sm:px-4 text-left">قیمت لحظه‌ای (USDT)</th>
+                  <th className="py-3 px-2 sm:px-4 text-left">تغییر ۲۴ ساعته (%)</th>
+                  <th className="py-3 px-2 sm:px-6 text-left">عملیات</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 text-sm">
+              <tbody className="block sm:table-row-group divide-y divide-slate-200 text-sm">
                 {filteredSymbols.map((item) => {
                   const ticker = tickers[item.symbol.toUpperCase()];
                   const isPositive = ticker ? ticker.rawChangePercent >= 0 : true;
 
                   return (
-                    <tr key={item._id || item.symbol} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3.5 px-3 sm:px-6">
-                        <div className="flex items-center gap-2.5 sm:gap-3">
-                          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-mono-tabular text-xs font-bold text-slate-800 shrink-0">
+                    <tr
+                      key={item._id || item.symbol}
+                      className="grid grid-cols-3 gap-x-2 gap-y-1.5 items-center px-3 pt-3 pb-2.5 border-b sm:table-row sm:border-0 sm:p-0 hover:bg-slate-50/80 transition-colors"
+                    >
+                      <td className="col-span-3 sm:table-cell sm:py-3 sm:px-6">
+                        <div className="flex items-center gap-2 sm:gap-3">
+                          <div className="flex w-7 h-7 sm:w-9 sm:h-9 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-mono-tabular text-xs font-bold text-slate-800 shrink-0">
                             {item.baseAsset.slice(0, 4)}
                           </div>
                           <div>
-                            <div className="font-bold text-slate-900 text-xs sm:text-sm">{item.label}</div>
+                            <div className="font-bold text-slate-900 text-[11px] sm:text-sm truncate max-w-[120px] sm:max-w-none">{item.label}</div>
                             <div className="text-[11px] sm:text-xs text-slate-500 font-mono-tabular">
                               {item.baseAsset}/{item.quoteAsset}
                             </div>
@@ -198,7 +201,7 @@ export function BinanceMarketPage({
                         </div>
                       </td>
 
-                      <td className="py-3.5 px-3 sm:px-4 text-left font-mono-tabular">
+                      <td className="sm:table-cell sm:py-3 sm:px-4 text-left font-mono-tabular">
                         {ticker ? (
                           <span
                             className={`text-xs sm:text-sm font-bold transition-colors duration-200 ${
@@ -216,7 +219,7 @@ export function BinanceMarketPage({
                         )}
                       </td>
 
-                      <td className="py-3.5 px-3 sm:px-4 text-left font-mono-tabular">
+                      <td className="sm:table-cell sm:py-3 sm:px-4 text-left font-mono-tabular">
                         {ticker ? (
                           <div
                             className={`inline-flex items-center gap-1 text-xs font-semibold ${
@@ -238,12 +241,12 @@ export function BinanceMarketPage({
                         )}
                       </td>
 
-                      <td className="py-3.5 px-3 sm:px-6 text-left">
+                      <td className="sm:table-cell sm:py-3 sm:px-6 text-left">
                         <button
                           type="button"
                           onClick={() => handleRemoveSymbol(item.symbol)}
                           disabled={removingSymbol === item.symbol}
-                          className="px-3 py-1.5 text-xs font-semibold text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg transition-colors inline-flex items-center gap-1.5 whitespace-nowrap cursor-pointer"
+                          className="px-2 sm:px-3 py-1.5 text-[11px] sm:text-xs font-semibold text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg transition-colors inline-flex items-center gap-1 sm:gap-1.5 whitespace-nowrap cursor-pointer"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                           <span>{removingSymbol === item.symbol ? 'حذف...' : 'حذف ارز'}</span>

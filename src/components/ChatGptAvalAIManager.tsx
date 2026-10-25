@@ -233,7 +233,7 @@ export function ChatGptAvalAIManager({ tickers }: ChatGptAvalAIManagerProps) {
   return (
     <div className="space-y-6">
       {/* Header & Status Banner */}
-      <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold text-slate-900">
@@ -267,7 +267,7 @@ export function ChatGptAvalAIManager({ tickers }: ChatGptAvalAIManagerProps) {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto min-w-0">
           <button
             type="button"
             onClick={() => setShowDocsSnippet(!showDocsSnippet)}

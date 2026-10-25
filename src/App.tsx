@@ -452,9 +452,9 @@ export default function App() {
       {/* 3. Main Content Column (با فاصله از سایدبار ثابت راست در دسکتاپ: lg:mr-[270px]) */}
       <div className="lg:mr-[270px] min-h-screen flex flex-col">
         {/* Top Header Bar */}
-        <header className="w-full bg-white border-b border-slate-200 px-4 sm:px-6 py-3.5 flex items-center justify-between gap-4 sticky top-0 z-20">
+        <header className="w-full bg-white border-b border-slate-200 px-3 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 sticky top-0 z-20">
           {/* Right Zone: Hamburger Button (Mobile) + Brand / Page Title */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
@@ -470,14 +470,14 @@ export default function App() {
                 e.preventDefault();
                 handleSelectMenu('dashboard');
               }}
-              className="text-sm sm:text-base font-extrabold tracking-tight text-slate-900 whitespace-nowrap shrink-0"
+              className="text-xs sm:text-base font-extrabold tracking-tight text-slate-900 truncate min-w-0"
             >
               پنل مدیریت هوشمند بایننس و تلگرام
             </a>
           </div>
 
           {/* Center Zone: Quick Navigation Links */}
-          <nav className="hidden xl:flex items-center gap-6 text-xs font-semibold text-slate-600">
+          <nav className="hidden xl:flex items-center gap-3 2xl:gap-6 text-xs font-semibold text-slate-600 min-w-0 overflow-x-auto">
             {menuItems.map((item) => (
               <button
                 key={item.id}
@@ -495,11 +495,11 @@ export default function App() {
           </nav>
 
           {/* Left Zone: 1 Primary Action */}
-          <div className="flex items-center gap-3 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 ms-auto">
             <button
               type="button"
               onClick={() => handleSelectMenu(activeMenu === 'binance' ? 'telegram' : 'binance')}
-              className="px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              className="px-2.5 sm:px-3.5 py-2 text-[10px] sm:text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
               {activeMenu === 'binance' ? 'مدیریت ربات تلگرام' : 'مدیریت ارزهای بایننس'}
             </button>
@@ -509,13 +509,13 @@ export default function App() {
         {/* Main Viewport Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1220px] w-full mx-auto space-y-6">
           {/* Contextual Breadcrumb */}
-          <div className="flex items-center justify-between text-xs text-slate-500">
+          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[11px] sm:text-xs text-slate-500">
             <div className="flex items-center gap-2">
               <span>پنل ادمین</span>
               <span aria-hidden="true">/</span>
               <span className="font-semibold text-slate-900">{activeMenuTitle}</span>
             </div>
-            <div className="flex items-center gap-4 font-mono-tabular">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono-tabular">
               <span className={wsConnected ? 'text-emerald-600' : 'text-amber-600'}>
                 Binance WS: {wsConnected ? 'Connected' : 'Connecting...'}
               </span>
