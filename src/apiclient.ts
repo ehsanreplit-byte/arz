@@ -898,6 +898,8 @@ export interface RegisteredSignalInfo {
   levelsAveragedFrom?: number;
   cycleNumber: number;
   createdAt: string;
+  /** the same timestamp rendered in Asia/Tehran */
+  createdAtIran?: string;
   dispatchedToTrade?: boolean;
   tradeStatus?: string;
   tradeDispatchNote?: string;
@@ -932,9 +934,15 @@ export interface SignalEngineStatus {
   requestGapMs: number;
   aiBatchSize?: number;
   cycleIntervalMs: number;
+  timeframeMinutes?: number;
+  alignedToTimeframe?: boolean;
+  timezone?: string;
   lastRunAt: string | null;
+  lastRunAtIran?: string | null;
   lastFinishedAt: string | null;
+  lastFinishedAtIran?: string | null;
   nextRunAt: string | null;
+  nextRunAtIran?: string | null;
   lastDurationMs: number | null;
   lastError: string | null;
   currentSymbol: string | null;

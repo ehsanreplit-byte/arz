@@ -41,6 +41,12 @@ services:
         value: "1"
       - key: SIGNAL_MIN_SCORE_PCT
         value: "50"
+      - key: SIGNAL_ALIGN_TO_TIMEFRAME
+        value: "true"
+      - key: SIGNAL_BOUNDARY_BUFFER_MS
+        value: "5000"
+      - key: SIGNAL_TIMEZONE
+        value: Asia/Tehran
       - key: SIGNAL_CYCLE_INTERVAL_MS
         value: "1800000"
       # ---- Trailing stop (حد سود شناور) ----

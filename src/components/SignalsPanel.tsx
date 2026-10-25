@@ -39,11 +39,14 @@ const formatPrice = (val: number | undefined) => {
 const formatDateTimeFa = (iso: string | null) => {
   if (!iso) return '—';
   try {
+    // always rendered in Iran time, regardless of the browser timezone
     return new Date(iso).toLocaleString('fa-IR', {
+      timeZone: 'Asia/Tehran',
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
+      second: '2-digit',
     });
   } catch {
     return iso;
@@ -192,9 +195,13 @@ export function SignalsPanel() {
     try {
       const res = await apiClient.toggleSignalsScheduler();
       setStatus(res.status);
+      const minutes = Math.max(
+        1,
+        Math.round((res.status?.cycleIntervalMs || 15 * 60 * 1000) / 60000)
+      );
       setActionMessage(
         res.isSchedulerEnabled
-          ? 'زمان‌بند خودکار ۳۰ دقیقه‌ای فعال شد.'
+          ? `زمان‌بند خودکار فعال شد — هر ${minutes} دقیقه، دقیقاً روی بسته‌شدن کندل.`
           : 'زمان‌بند خودکار غیرفعال شد.'
       );
     } catch (err: any) {
@@ -344,10 +351,15 @@ export function SignalsPanel() {
             </div>
           </div>
           <div className="space-y-0.5">
-            <div className="text-[11px] text-slate-500">اجرای بعدی</div>
+            <div className="text-[11px] text-slate-500">اجرای بعدی (به وقت ایران)</div>
             <div className="text-sm font-extrabold font-mono-tabular text-blue-600">
               {status?.isSchedulerEnabled ? formatCountdown(status?.nextRunAt || null) : 'غیرفعال'}
             </div>
+            {status?.isSchedulerEnabled && (status?.nextRunAtIran || status?.nextRunAt) && (
+              <div className="text-[10px] text-slate-500 font-mono-tabular">
+                {status?.nextRunAtIran || formatDateTimeFa(status?.nextRunAt || null)}
+              </div>
+            )}
           </div>
           <div className="space-y-0.5">
             <div className="text-[11px] text-slate-500">وضعیت فعلی</div>
@@ -706,7 +718,7 @@ export function SignalsPanel() {
                         </td>
                         <td className="px-4 py-3">
                           <span className="text-[11px] text-slate-500 font-mono-tabular whitespace-nowrap">
-                            {formatDateTimeFa(sig.createdAt)}
+                            {sig.createdAtIran || formatDateTimeFa(sig.createdAt)}
                           </span>
                         </td>
                         <td className="px-4 py-3">

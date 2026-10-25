@@ -22,10 +22,56 @@ import {
 // ---------------------------------------------------------------------------
 // Configuration (env-overridable so tests / manual runs can be faster)
 // ---------------------------------------------------------------------------
-const CYCLE_INTERVAL_MS = Math.max(
-  60_000,
-  Number(process.env.SIGNAL_CYCLE_INTERVAL_MS || 30 * 60 * 1000)
+/** Parses '15m' / '1h' / '4h' / '1d' into minutes (default 15). */
+function parseTimeframeMinutes(tf: string): number {
+  const m = /^(\d+)\s*([mhd])$/i.exec(String(tf || '').trim());
+  if (!m) return 15;
+  const value = Math.max(1, Number(m[1]));
+  const unit = m[2].toLowerCase();
+  if (unit === 'h') return value * 60;
+  if (unit === 'd') return value * 60 * 24;
+  return value;
+}
+
+/** Timeframe in minutes drives the schedule (15m → 00/15/30/45 …). */
+const TIMEFRAME_MINUTES = parseTimeframeMinutes(process.env.SIGNAL_TIMEFRAME || '15m');
+/**
+ * Align every cycle to the UTC candle close (…:00, :15, :30, :45 for 15m).
+ * Set SIGNAL_ALIGN_TO_TIMEFRAME=false to go back to a fixed interval.
+ */
+const ALIGN_TO_TIMEFRAME = process.env.SIGNAL_ALIGN_TO_TIMEFRAME !== 'false';
+/** Small delay after the boundary so the exchange has published the closed candle. */
+const BOUNDARY_BUFFER_MS = Math.max(
+  0,
+  Number(process.env.SIGNAL_BOUNDARY_BUFFER_MS ?? 5000)
 );
+const CYCLE_INTERVAL_MS = ALIGN_TO_TIMEFRAME
+  ? TIMEFRAME_MINUTES * 60 * 1000
+  : Math.max(60_000, Number(process.env.SIGNAL_CYCLE_INTERVAL_MS || 30 * 60 * 1000));
+
+/** Timestamps are computed in UTC but recorded/displayed in this timezone. */
+const REPORT_TIMEZONE = process.env.SIGNAL_TIMEZONE || 'Asia/Tehran';
+
+/** Next UTC boundary of the configured timeframe (+ a few seconds of buffer). */
+function nextUtcBoundary(fromMs: number = Date.now()): number {
+  const step = TIMEFRAME_MINUTES * 60 * 1000;
+  const boundary = (Math.floor(fromMs / step) + 1) * step;
+  return boundary + BOUNDARY_BUFFER_MS;
+}
+
+/** Formats a timestamp in the reporting timezone (Asia/Tehran by default). */
+function formatReportTime(ms: number | null): string | null {
+  if (!ms) return null;
+  try {
+    return new Intl.DateTimeFormat('fa-IR', {
+      timeZone: REPORT_TIMEZONE,
+      dateStyle: 'short',
+      timeStyle: 'medium',
+    }).format(new Date(ms));
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
 const REQUEST_GAP_MS = Math.max(
   0,
   Number(process.env.SIGNAL_REQUEST_GAP_MS || 30 * 1000)
@@ -82,9 +128,17 @@ export interface SignalEngineState {
   /** symbols analysed per ChatGPT request */
   aiBatchSize: number;
   cycleIntervalMs: number;
+  /** timeframe length that drives the schedule, in minutes */
+  timeframeMinutes: number;
+  /** true when cycles are aligned to UTC candle closes */
+  alignedToTimeframe: boolean;
+  timezone: string;
   lastRunAt: string | null;
+  lastRunAtIran: string | null;
   lastFinishedAt: string | null;
+  lastFinishedAtIran: string | null;
   nextRunAt: string | null;
+  nextRunAtIran: string | null;
   lastDurationMs: number | null;
   lastError: string | null;
   currentSymbol: string | null;
@@ -580,9 +634,15 @@ class SignalEngine {
     requestGapMs: REQUEST_GAP_MS,
     aiBatchSize: AI_BATCH_SIZE,
     cycleIntervalMs: CYCLE_INTERVAL_MS,
+    timeframeMinutes: TIMEFRAME_MINUTES,
+    alignedToTimeframe: ALIGN_TO_TIMEFRAME,
+    timezone: REPORT_TIMEZONE,
     lastRunAt: null,
+    lastRunAtIran: null,
     lastFinishedAt: null,
+    lastFinishedAtIran: null,
     nextRunAt: null,
+    nextRunAtIran: null,
     lastDurationMs: null,
     lastError: null,
     currentSymbol: null,
@@ -639,12 +699,41 @@ class SignalEngine {
     return this.state.isSchedulerEnabled;
   }
 
+  /**
+   * Arms the timer for the NEXT UTC candle close of the configured timeframe
+   * (e.g. 15m → 00, 15, 30, 45 minutes past the hour, UTC).
+   */
   private scheduleNext(): void {
     if (this.timer) clearTimeout(this.timer);
+
+    const runAt = ALIGN_TO_TIMEFRAME
+      ? nextUtcBoundary()
+      : Date.now() + CYCLE_INTERVAL_MS;
+
+    this.state.nextRunAt = new Date(runAt).toISOString();
+    this.state.nextRunAtIran = formatReportTime(runAt);
+
     this.timer = setTimeout(() => {
-      void this.runCycle('schedule');
-    }, CYCLE_INTERVAL_MS);
-    this.state.nextRunAt = new Date(Date.now() + CYCLE_INTERVAL_MS).toISOString();
+      void this.onScheduledTick();
+    }, Math.max(1000, runAt - Date.now()));
+  }
+
+  /**
+   * Fires exactly on the candle boundary. A manual cycle never postpones it:
+   * if one is still running we wait for it (up to 10 minutes) and then run the
+   * scheduled cycle anyway.
+   */
+  private async onScheduledTick(): Promise<void> {
+    this.timer = null;
+    const deadline = Date.now() + 10 * 60 * 1000;
+    while (this.state.isRunning && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+    }
+    try {
+      await this.runCycle('schedule');
+    } finally {
+      if (this.state.isSchedulerEnabled) this.scheduleNext();
+    }
   }
 
   /**
@@ -671,6 +760,7 @@ class SignalEngine {
     this.state.lastError = null;
     this.state.cycleNumber += 1;
     this.state.lastRunAt = new Date(startedAt).toISOString();
+    this.state.lastRunAtIran = formatReportTime(startedAt);
     this.state.lastCycleResults = [];
 
     const cycleNumber = this.state.cycleNumber;
@@ -987,11 +1077,13 @@ class SignalEngine {
           // The signal is only persisted when a real trade was created for it.
           // Storing every evaluated symbol (qualified or not) was the main
           // source of database growth (thousands of rows per day).
-          const createdAtIso = new Date().toISOString();
+          const createdAtMs = Date.now();
+          const createdAtIso = new Date(createdAtMs).toISOString();
           const tempSignal: IRegisteredSignal = {
             ...payload,
             _id: dbRepo.newSignalId(),
             createdAt: createdAtIso,
+            createdAtIran: formatReportTime(createdAtMs) || undefined,
           };
 
           let sentToDemo = false;
@@ -1081,14 +1173,12 @@ class SignalEngine {
       this.state.dispatchedLastCycle = dispatched;
       this.state.evaluatedLastCycle = evaluated;
       this.state.lastDurationMs = durationMs;
-      this.state.lastFinishedAt = new Date().toISOString();
+      const finishedMs = Date.now();
+      this.state.lastFinishedAt = new Date(finishedMs).toISOString();
+      this.state.lastFinishedAtIran = formatReportTime(finishedMs);
       this.state.currentSymbol = null;
       this.state.currentIndex = 0;
       this.state.isRunning = false;
-
-      if (this.state.isSchedulerEnabled) {
-        this.scheduleNext();
-      }
 
       console.log(
         `[signals] cycle #${cycleNumber} (${trigger}) finished in ${Math.round(
@@ -1100,11 +1190,10 @@ class SignalEngine {
     } catch (err: any) {
       this.state.isRunning = false;
       this.state.lastError = err?.message || 'خطای غیرمنتظره در چرخه سیگنال';
-      this.state.lastFinishedAt = new Date().toISOString();
+      const failedMs = Date.now();
+      this.state.lastFinishedAt = new Date(failedMs).toISOString();
+      this.state.lastFinishedAtIran = formatReportTime(failedMs);
       this.state.currentSymbol = null;
-      if (this.state.isSchedulerEnabled) {
-        this.scheduleNext();
-      }
       return { ok: false, error: this.state.lastError || 'خطای غیرمنتظره در چرخه سیگنال' };
     }
   }

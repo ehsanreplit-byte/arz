@@ -83,6 +83,8 @@ export interface ISignalMethodItem {
 
 export interface IRegisteredSignal {
   _id: string;
+  /** creation time rendered in the reporting timezone (Asia/Tehran) */
+  createdAtIran?: string;
   symbol: string;
   label: string;
   interval: string; // '15m'
@@ -510,6 +512,7 @@ export const TelegramMessageModel = mongoose.models.TelegramMessage || mongoose.
 export const AvalAIConfigModel = mongoose.models.AvalAIConfig || mongoose.model<IAvalAIConfig & Document>('AvalAIConfig', AvalAIConfigSchema);
 
 const RegisteredSignalSchema = new Schema<IRegisteredSignal & Document>({
+  createdAtIran: { type: String, default: '' },
   symbol: { type: String, required: true, index: true },
   label: { type: String, required: true },
   interval: { type: String, default: '15m' },
